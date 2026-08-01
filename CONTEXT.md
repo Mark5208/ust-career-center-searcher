@@ -59,19 +59,31 @@ _Avoid_: profile, parsed CV (as a product concept), editable profile
 ### Assessment
 
 **Hard Constraint**:
-A pass, fail, or unknown check on language or work location using Preferences against the Job Posting. Location passes if the posting’s work location is among acceptable locations, or is clearly remote and remote is accepted; fails on a definite mismatch; unknown if Preferences locations are empty or the posting location is missing/unclear. Language passes if every language the posting requires appears in Preferences; fails if a required language is missing; unknown if Preferences languages are empty or needs are unclear — “preferred” or vague language wording is not a hard require. Unknown never counts as fail.
+A pass, fail, or unknown check on language or work location using Preferences against the Job Posting. Location passes if the posting’s work location is among acceptable locations, or is clearly remote and remote is accepted; fails on a definite mismatch; unknown if Preferences locations are empty or the posting location is missing/unclear. Language passes if every language the posting requires appears in Preferences; fails if a required language is missing; unknown if Preferences languages are empty or needs are unclear — “preferred” or vague language wording is not a hard require. Unknown never counts as fail. Overall outcome for a posting: fail if any Hard Constraint fails; else pass if all that apply pass; else unknown.
 _Avoid_: requirement, filter, must-have (when meaning this check)
 
+**Assessment Summary**:
+The browse/list view of fit for one Job Posting: title, employer, Listing status, Deadline status, overall Hard Constraint outcome, Relevance band, and whether a Preparation Packet exists (and if Stale). Default catalog shows Open postings with Deadline Upcoming or Unknown; sorts by Relevance (Strong, then Mixed, then Weak) then sooner deadline; overall Hard Constraint fail sorts after pass and unknown; Closed and Deadline Passed are hidden by default but toggleable.
+_Avoid_: job card, list row, dashboard row
+
+**Pending**:
+Assessment Summary state when no Match Assessment exists yet — no Relevance or Evidence; Prepare is unavailable; Pending rows sort after assessed ones.
+_Avoid_: loading, unassessed, not ready (alone)
+
 **Match Assessment**:
-The full fit judgment for one Job Posting: Hard Constraints, Relevance, and Evidence citing the Master CV and the posting. Rebuilt for postings that are new or whose detail changed in a Crawl; rebuilt for Open postings when the Master CV or Preferences change; otherwise the last Assessment is kept.
+The full fit judgment for one Job Posting shown in detail: Hard Constraints with short reasons, Relevance, and Evidence pairs, with actions to Prepare, Override, or Delete. Rebuilt for postings that are new or whose detail changed in a Crawl; rebuilt for Open postings when the Master CV or Preferences change; otherwise the last Assessment is kept.
 _Avoid_: score, analysis, match result
 
 **Relevance**:
 Coarse fit band for soft factors: Strong, Mixed, or Weak — not a numeric score.
 _Avoid_: match score, percentage, ranking score
 
+**Evidence pair**:
+One justification unit: a Job Posting excerpt, a Master CV or Candidate Snapshot excerpt (or “not found”), and a one-line role — supports Relevance, weakens it, or explains a Hard Constraint.
+_Avoid_: quote pair, citation row
+
 **Evidence**:
-Concrete citations from the Master CV (or Candidate Snapshot) and from the Job Posting that justify the Match Assessment.
+The short list of Evidence pairs in a Match Assessment (about three to seven) used to decide Prepare vs skip; deeper gaps belong in the Gap Report after prepare.
 _Avoid_: quote, reference, highlight (alone)
 
 **Gap Report**:
