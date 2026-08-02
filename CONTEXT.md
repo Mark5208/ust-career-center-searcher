@@ -18,16 +18,20 @@ _Avoid_: job, role, vacancy, opening (when referring to the stored listing)
 The tool opens the browser; the user completes Job Board login (including DUO); the user then starts a Crawl. No board passwords are stored.
 _Avoid_: auto-login, credentials file, stored session password
 
+**Crawl Filters**:
+User-chosen Job Board search criteria applied during a Crawl: the seven filter groups (Business natures, working locations, languages, job natures, employment types, levels of qualification, employment modes), the three checkboxes (Talent-Wise Employment Charter, Active Job, Non-Chinese speaking students would be considered), and an optional Deadline Hardline. Default is Active Job on, other filters empty, Hardline unset. Narrow filters only add or update matching postings; they never mark Closed.
+_Avoid_: search facets, scrape filters, board query
+
 **Crawl**:
-A user-started sync of the Job Board into the local catalog: list discovery, then detail fetch for postings within the Deadline Hardline. Default is incremental — detail only for new or changed postings; Listing status becomes Closed only after a completed list sync shows a posting absent. If auth is lost mid-Crawl, the run ends as partial success: keep what was stored; do not mark untouched postings Closed.
+A user-started sync of the Job Board into the local catalog: apply Crawl Filters for list discovery, then detail-fetch new or changed postings (skipping add/detail when a Deadline Hardline excludes them). Default is incremental. Narrow filtered Crawls only add or update. A completed list sync with unfiltered or Active-Job-only scope may mark absent postings Closed. If auth is lost mid-Crawl, the run ends as partial success: keep what was stored; do not mark untouched postings Closed.
 _Avoid_: scrape run, sync job, harvest
 
 **Full Refresh**:
-A Crawl mode that re-fetches detail for every Open Job Posting within the Deadline Hardline, not only new or changed ones.
+A Crawl mode that re-fetches detail for every Open Job Posting in scope of the Crawl Filters (and Deadline Hardline if set), not only new or changed ones.
 _Avoid_: force sync, rebuild catalog, hard reset
 
 **Listing status**:
-Open or Closed for a Job Posting. Closed means absent from a completed list sync — not merely “detail not fetched yet.”
+Open or Closed for a Job Posting. Closed means absent from a completed Closing-capable list sync (unfiltered or Active-Job-only) — not merely “detail not fetched yet,” and not absence from a narrowly filtered Crawl.
 _Avoid_: expired, active, live (use Deadline status or Listing status explicitly)
 
 **Deadline status**:
@@ -35,7 +39,7 @@ Whether the Job Posting's application deadline is Upcoming, Passed, or Unknown �
 _Avoid_: expired (alone), overdue
 
 **Deadline Hardline**:
-A user-set cutoff date; a Crawl does not spend effort on Job Postings whose deadline falls before it.
+An optional Crawl Filter cutoff date; after list discovery, the Crawl skips detail fetch and catalog add for postings whose deadline falls before it. Unset means no extra deadline limit (Active Job may still apply).
 _Avoid_: filter, max age, crawl window
 
 **Delete**:
@@ -49,8 +53,12 @@ The user's sole authored experience-and-skills document (LaTeX); never overwritt
 _Avoid_: resume, profile, base CV
 
 **Preferences**:
-A minimal sidecar for Hard Constraint inputs only: languages spoken (optional level) and acceptable work locations. Empty language or location fields leave the related Hard Constraint unknown, never fail.
-_Avoid_: profile, settings, user config, visa, GPA
+A sidecar for Hard Constraint inputs only — not Crawl Filters: languages spoken (optional level), acceptable work locations, and Gap Tolerance. Empty fields leave the related Hard Constraint unknown, never fail.
+_Avoid_: profile, settings, user config, visa, GPA, Crawl Filters
+
+**Gap Tolerance**:
+How much study interruption the user will accept for a job’s employment period: None, Semester, Year, or Any. Unset leaves the Gap Tolerance Hard Constraint unknown.
+_Avoid_: gap year flag, internship length preference (alone)
 
 **Candidate Snapshot**:
 A structured view derived from the Master CV for matching: contact if present, education, experience, projects, and skills/tools as written — no inferred skills, and no Preferences. Rebuilt when the Master CV changes; inspectable; not hand-edited (fix the Master CV instead).
@@ -59,7 +67,7 @@ _Avoid_: profile, parsed CV (as a product concept), editable profile
 ### Assessment
 
 **Hard Constraint**:
-A pass, fail, or unknown check on language or work location using Preferences against the Job Posting. Location passes if the posting’s work location is among acceptable locations, or is clearly remote and remote is accepted; fails on a definite mismatch; unknown if Preferences locations are empty or the posting location is missing/unclear. Language passes if every language the posting requires appears in Preferences; fails if a required language is missing; unknown if Preferences languages are empty or needs are unclear — “preferred” or vague language wording is not a hard require. Unknown never counts as fail. Overall outcome for a posting: fail if any Hard Constraint fails; else pass if all that apply pass; else unknown.
+A pass, fail, or unknown check using Preferences against the Job Posting for language, work location, or Gap Tolerance. Location passes if the posting’s work location is among acceptable locations, or is clearly remote and remote is accepted; fails on a definite mismatch; unknown if Preferences locations are empty or the posting location is missing/unclear. Language passes if every language the posting requires appears in Preferences; fails if a required language is missing; unknown if Preferences languages are empty or needs are unclear — “preferred” or vague language wording is not a hard require. Gap Tolerance fails when the posting’s employment period requires more study interruption than the user accepts; passes when within tolerance; unknown if Gap Tolerance is unset or the posting’s period impact is unclear. Unknown never counts as fail. Overall outcome for a posting: fail if any Hard Constraint fails; else pass if all that apply pass; else unknown.
 _Avoid_: requirement, filter, must-have (when meaning this check)
 
 **Assessment Summary**:
