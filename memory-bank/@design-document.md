@@ -29,3 +29,13 @@ Through `Assistant` and `/crawl` UI, with primary tests on a fake `JobBoardSessi
 - Auth-loss mid-Crawl → partial success; keep stored work; do not mark untouched postings Closed.
 - Live board: Playwright `JobBoardSession` using selectors from `.scratch/job-board-dom.md`.
 - `CrawlPacer` random delays before detail fetches and between list pages (tested via recording fake; no real sleep in primary tests).
+
+## Assessment slice (issue #5)
+
+Through `Assistant` and `/` Assessment Summary UI:
+
+- Assessment Summary shows title, employer, Listing status, Deadline status, overall Hard Constraint outcome, Relevance, Preparation Packet presence/Stale (packet absent in this slice).
+- Default filter: Open + Deadline Upcoming/Unknown; Closed and Deadline Passed toggleable; sort Relevance then sooner deadline; Hard Constraint fail after pass/unknown; Pending last.
+- Hard Constraints (language, location, Gap Tolerance) are rule-based with short reasons (`hard_constraints`); pure-rule tests allowed at that seam.
+- Relevance Strong/Mixed/Weak (+ Evidence) via `LlmJudge` (fakeable); Match Assessment stays Pending when the judge is unavailable; Prepare unavailable while Pending.
+- Rebuild Match Assessments for new/changed Crawl detail, and for Open postings when Master CV path or Preferences change.

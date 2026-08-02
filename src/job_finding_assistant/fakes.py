@@ -5,6 +5,7 @@ from pathlib import Path
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot, build_candidate_snapshot
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
+from job_finding_assistant.match_assessment import EvidencePair, JudgeResult, RelevanceBand
 
 
 class FakeCrawlPacer:
@@ -129,8 +130,51 @@ class FakeMasterCvStore:
 
 
 class FakeLlmJudge:
+    """Scripted Relevance/Evidence; unavailable when `available` is False."""
+
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        relevance: RelevanceBand = "Mixed",
+        relevances: list[RelevanceBand] | None = None,
+        evidence: list[EvidencePair] | None = None,
+    ) -> None:
+        self._available = available
+        self._relevance = relevance
+        self._relevances = list(relevances) if relevances is not None else None
+        self._relevance_index = 0
+        self._evidence = list(
+            evidence
+            or [
+                EvidencePair(
+                    job_excerpt="Job description excerpt",
+                    candidate_excerpt="Candidate snapshot excerpt",
+                    role="supports Relevance",
+                )
+            ]
+        )
+        self.judge_calls = 0
+
     def available(self) -> bool:
-        return False
+        return self._available
+
+    def judge(
+        self,
+        *,
+        job_detail_fields: dict[str, str],
+        candidate_snapshot: CandidateSnapshot | None,
+    ) -> JudgeResult:
+        del job_detail_fields, candidate_snapshot
+        if not self._available:
+            raise RuntimeError("FakeLlmJudge is not available")
+        self.judge_calls += 1
+        if self._relevances is not None:
+            relevance = self._relevances[self._relevance_index]
+            self._relevance_index += 1
+        else:
+            relevance = self._relevance
+        return JudgeResult(relevance=relevance, evidence=list(self._evidence))
 
 
 class FakeLlmCvTailor:

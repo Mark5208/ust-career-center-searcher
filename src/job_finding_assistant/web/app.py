@@ -29,8 +29,16 @@ _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
 class SupportsAssistantUi(Protocol):
-    def list_assessment_summaries(self) -> list[AssessmentSummary]:
+    def list_assessment_summaries(
+        self,
+        *,
+        include_closed: bool = False,
+        include_passed_deadlines: bool = False,
+    ) -> list[AssessmentSummary]:
         """Return Assessment Summaries for the catalog page."""
+
+    def can_prepare(self, job_posting_id: str) -> bool:
+        """Return whether Prepare is available for the Job Posting."""
 
     def get_master_cv_path(self) -> str | None:
         """Return the configured Master CV path."""
@@ -108,12 +116,33 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
     app.state.last_crawl_outcome = None
 
     @app.get("/", response_class=HTMLResponse)
-    def assessment_summaries_page(request: Request) -> HTMLResponse:
-        summaries = request.app.state.assistant.list_assessment_summaries()
+    def assessment_summaries_page(
+        request: Request,
+        include_closed: str = "0",
+        include_passed_deadlines: str = "0",
+    ) -> HTMLResponse:
+        show_closed = include_closed == "1"
+        show_passed = include_passed_deadlines == "1"
+        current = request.app.state.assistant
+        summaries = current.list_assessment_summaries(
+            include_closed=show_closed,
+            include_passed_deadlines=show_passed,
+        )
+        rows = [
+            {
+                "summary": summary,
+                "can_prepare": current.can_prepare(summary.job_posting_id),
+            }
+            for summary in summaries
+        ]
         return _TEMPLATES.TemplateResponse(
             request,
             "assessment_summaries.html",
-            {"summaries": summaries},
+            {
+                "rows": rows,
+                "include_closed": show_closed,
+                "include_passed_deadlines": show_passed,
+            },
         )
 
     @app.get("/candidate", response_class=HTMLResponse)

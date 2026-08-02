@@ -1,4 +1,4 @@
-"""SQLite persistence for Job Postings, Preferences, and later assessment metadata."""
+"""SQLite persistence for Job Postings, Preferences, and Match Assessments."""
 
 from __future__ import annotations
 
@@ -6,8 +6,16 @@ import json
 import sqlite3
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 from job_finding_assistant.crawl_filters import CrawlFilters
+from job_finding_assistant.hard_constraints import ConstraintOutcome, ConstraintResult
+from job_finding_assistant.match_assessment import (
+    EvidencePair,
+    MatchAssessment,
+    NamedConstraintResult,
+    RelevanceBand,
+)
 from job_finding_assistant.preferences import GapTolerance, LanguagePreference, Preferences
 
 
@@ -60,6 +68,17 @@ class CatalogStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS match_assessments (
+                    job_posting_id TEXT PRIMARY KEY,
+                    hard_constraint_outcome TEXT NOT NULL,
+                    hard_constraints_json TEXT NOT NULL,
+                    relevance TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL
+                )
+                """
+            )
 
     def _ensure_job_posting_columns(self, connection: sqlite3.Connection) -> None:
         existing = {
@@ -77,17 +96,132 @@ class CatalogStore:
                     f"ALTER TABLE job_postings ADD COLUMN {column} {sql_type}"
                 )
 
-    def list_assessment_summary_rows(self) -> list[dict[str, str]]:
-        """Return stored rows used to build Assessment Summaries (empty when none)."""
+    def list_assessment_summary_rows(self) -> list[dict[str, str | None]]:
+        """Return Job Posting rows joined with Match Assessment fields when present."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, title, employer, listing_status, deadline_status
-                FROM job_postings
-                ORDER BY id
+                SELECT
+                    p.id,
+                    p.title,
+                    p.employer,
+                    p.listing_status,
+                    p.deadline_status,
+                    p.application_deadline,
+                    a.hard_constraint_outcome,
+                    a.relevance
+                FROM job_postings AS p
+                LEFT JOIN match_assessments AS a ON a.job_posting_id = p.id
+                ORDER BY p.id
                 """
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_open_job_posting_ids(self) -> list[str]:
+        """Return ids of Open Job Postings (for assessment rebuild)."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id FROM job_postings
+                WHERE listing_status = 'Open'
+                ORDER BY id
+                """
+            ).fetchall()
+        return [row["id"] for row in rows]
+
+    def save_match_assessment(self, assessment: MatchAssessment) -> None:
+        """Insert or replace the Match Assessment for one Job Posting."""
+        hard_constraints_json = json.dumps(
+            [
+                {
+                    "name": item.name,
+                    "outcome": item.result.outcome,
+                    "reason": item.result.reason,
+                }
+                for item in assessment.hard_constraints
+            ]
+        )
+        evidence_json = json.dumps(
+            [
+                {
+                    "job_excerpt": item.job_excerpt,
+                    "candidate_excerpt": item.candidate_excerpt,
+                    "role": item.role,
+                }
+                for item in assessment.evidence
+            ]
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO match_assessments (
+                    job_posting_id,
+                    hard_constraint_outcome,
+                    hard_constraints_json,
+                    relevance,
+                    evidence_json
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(job_posting_id) DO UPDATE SET
+                    hard_constraint_outcome = excluded.hard_constraint_outcome,
+                    hard_constraints_json = excluded.hard_constraints_json,
+                    relevance = excluded.relevance,
+                    evidence_json = excluded.evidence_json
+                """,
+                (
+                    assessment.job_posting_id,
+                    assessment.hard_constraint_outcome,
+                    hard_constraints_json,
+                    assessment.relevance,
+                    evidence_json,
+                ),
+            )
+
+    def get_match_assessment(self, job_posting_id: str) -> MatchAssessment | None:
+        """Return the stored Match Assessment, or None when Pending."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    job_posting_id,
+                    hard_constraint_outcome,
+                    hard_constraints_json,
+                    relevance,
+                    evidence_json
+                FROM match_assessments
+                WHERE job_posting_id = ?
+                """,
+                (job_posting_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        constraints_raw = json.loads(row["hard_constraints_json"])
+        evidence_raw = json.loads(row["evidence_json"])
+        return MatchAssessment(
+            job_posting_id=row["job_posting_id"],
+            hard_constraint_outcome=cast(
+                ConstraintOutcome, row["hard_constraint_outcome"]
+            ),
+            hard_constraints=[
+                NamedConstraintResult(
+                    name=item["name"],
+                    result=ConstraintResult(
+                        outcome=cast(ConstraintOutcome, item["outcome"]),
+                        reason=item["reason"],
+                    ),
+                )
+                for item in constraints_raw
+            ],
+            relevance=cast(RelevanceBand, row["relevance"]),
+            evidence=[
+                EvidencePair(
+                    job_excerpt=item["job_excerpt"],
+                    candidate_excerpt=item["candidate_excerpt"],
+                    role=item["role"],
+                )
+                for item in evidence_raw
+            ],
+        )
 
     def get_preferences(self) -> Preferences:
         """Return Preferences; missing row means all fields empty/unset."""

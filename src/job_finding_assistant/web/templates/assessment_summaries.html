@@ -20,7 +20,7 @@
         min-height: 100vh;
       }
       main {
-        max-width: 42rem;
+        max-width: 48rem;
         margin: 0 auto;
         padding: 3rem 1.5rem;
       }
@@ -45,6 +45,43 @@
         padding: 1.25rem 0;
         border-top: 1px solid var(--line);
       }
+      .filters {
+        margin: 1.25rem 0 0.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+      .filters label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .listing {
+        list-style: none;
+        padding: 0;
+        margin: 1rem 0 0;
+        border-top: 1px solid var(--line);
+      }
+      .listing li {
+        padding: 1rem 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .listing .title {
+        font-size: 1.05rem;
+        margin: 0 0 0.25rem;
+      }
+      .listing .meta {
+        color: var(--muted);
+        font-size: 0.92rem;
+        line-height: 1.45;
+        margin: 0;
+      }
+      .listing .prepare {
+        margin-top: 0.35rem;
+        font-size: 0.92rem;
+      }
     </style>
   </head>
   <body>
@@ -56,10 +93,52 @@
       <h1>Job Finding Assistant</h1>
       <p>Local catalog of Job Postings from the HKUST Job Board.</p>
       <h2>Assessment Summary</h2>
-      {% if summaries %}
-      <ul>
-        {% for summary in summaries %}
-        <li>{{ summary.title }} — {{ summary.employer }}</li>
+      <form class="filters" method="get" action="/">
+        <label>
+          <input
+            type="checkbox"
+            name="include_closed"
+            value="1"
+            {% if include_closed %}checked{% endif %}
+            onchange="this.form.submit()"
+          />
+          Show Closed
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            name="include_passed_deadlines"
+            value="1"
+            {% if include_passed_deadlines %}checked{% endif %}
+            onchange="this.form.submit()"
+          />
+          Show Deadline Passed
+        </label>
+      </form>
+      {% if rows %}
+      <ul class="listing">
+        {% for row in rows %}
+        <li>
+          <p class="title">{{ row.summary.title }} — {{ row.summary.employer }}</p>
+          <p class="meta">
+            Listing: {{ row.summary.listing_status }} ·
+            Deadline: {{ row.summary.deadline_status }} ·
+            {% if row.summary.pending %}
+            Pending
+            {% else %}
+            Hard Constraint: {{ row.summary.hard_constraint_outcome }} ·
+            Relevance: {{ row.summary.relevance }} ·
+            {% if row.summary.has_preparation_packet %}
+            Preparation Packet{% if row.summary.preparation_packet_stale %} (Stale){% endif %}
+            {% else %}
+            No Preparation Packet
+            {% endif %}
+            {% endif %}
+          </p>
+          {% if not row.can_prepare %}
+          <p class="prepare">Prepare unavailable</p>
+          {% endif %}
+        </li>
         {% endfor %}
       </ul>
       {% else %}

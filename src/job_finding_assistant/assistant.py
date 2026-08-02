@@ -10,7 +10,9 @@ from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
+from job_finding_assistant.hard_constraints import evaluate_all, overall_hard_constraint
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
+from job_finding_assistant.match_assessment import MatchAssessment, NamedConstraintResult
 from job_finding_assistant.ports import (
     CrawlPacer,
     JobBoardSession,
@@ -41,6 +43,11 @@ class AssessmentSummary:
     listing_status: str
     deadline_status: str
     pending: bool = True
+    hard_constraint_outcome: str | None = None
+    relevance: str | None = None
+    has_preparation_packet: bool = False
+    preparation_packet_stale: bool = False
+    application_deadline: str | None = None
 
 
 class Assistant:
@@ -66,24 +73,51 @@ class Assistant:
         self._llm_cv_tailor = llm_cv_tailor
         self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
 
-    def list_assessment_summaries(self) -> list[AssessmentSummary]:
-        """Return Assessment Summaries for Job Postings in the local catalog."""
-        rows = self._catalog_store.list_assessment_summary_rows()
-        return [
+    def list_assessment_summaries(
+        self,
+        *,
+        include_closed: bool = False,
+        include_passed_deadlines: bool = False,
+    ) -> list[AssessmentSummary]:
+        """Return Assessment Summaries with default filter/sort (glossary)."""
+        summaries = [
             AssessmentSummary(
-                job_posting_id=row["id"],
+                job_posting_id=row["id"] or "",
                 title=row["title"] or "",
                 employer=row["employer"] or "",
                 listing_status=row["listing_status"] or "Open",
                 deadline_status=row["deadline_status"] or "Unknown",
-                pending=True,
+                pending=row.get("relevance") is None,
+                hard_constraint_outcome=row.get("hard_constraint_outcome"),
+                relevance=row.get("relevance"),
+                has_preparation_packet=False,
+                preparation_packet_stale=False,
+                application_deadline=row.get("application_deadline"),
             )
-            for row in rows
+            for row in self._catalog_store.list_assessment_summary_rows()
         ]
+        filtered = [
+            summary
+            for summary in summaries
+            if _passes_default_filter(
+                summary,
+                include_closed=include_closed,
+                include_passed_deadlines=include_passed_deadlines,
+            )
+        ]
+        return sorted(filtered, key=_summary_sort_key)
+
+    def can_prepare(self, job_posting_id: str) -> bool:
+        """Prepare is unavailable while Pending or when Hard Constraints fail."""
+        assessment = self._catalog_store.get_match_assessment(job_posting_id)
+        if assessment is None:
+            return False
+        return assessment.hard_constraint_outcome != "fail"
 
     def set_master_cv_path(self, path: str) -> None:
         """Point at a Master CV LaTeX file; never overwrites that file."""
         self._master_cv.set_master_cv_path(path)
+        self._rebuild_open_assessments()
 
     def get_master_cv_path(self) -> str | None:
         """Return the configured Master CV path, if any."""
@@ -100,6 +134,7 @@ class Assistant:
     def update_preferences(self, preferences: Preferences) -> None:
         """Replace Preferences (languages, locations, Gap Tolerance — not Crawl Filters)."""
         self._catalog_store.save_preferences(preferences)
+        self._rebuild_open_assessments()
 
     def get_crawl_filters(self) -> CrawlFilters:
         """Return Crawl Filters (default Active Job on; Hardline unset)."""
@@ -158,6 +193,7 @@ class Assistant:
                     detail_json=json.dumps(detail.fields),
                     list_fingerprint=fingerprint,
                 )
+                self._assess_job_posting(detail.id)
                 stored_count += 1
         except AuthLostError:
             return CrawlOutcome(status="partial_success", stored_count=stored_count)
@@ -165,6 +201,64 @@ class Assistant:
         if filters.is_closing_capable():
             self._catalog_store.mark_missing_open_postings_closed(seen_ids)
         return CrawlOutcome(status="completed", stored_count=stored_count)
+
+    def _rebuild_open_assessments(self) -> None:
+        for job_posting_id in self._catalog_store.list_open_job_posting_ids():
+            self._assess_job_posting(job_posting_id)
+
+    def _assess_job_posting(self, job_posting_id: str) -> None:
+        if not self._llm_judge.available():
+            return
+        posting = self._catalog_store.get_job_posting(job_posting_id)
+        if posting is None or not posting.get("detail_json"):
+            return
+        detail_fields = json.loads(posting["detail_json"] or "{}")
+        preferences = self.get_preferences()
+        constraint_checks = evaluate_all(
+            preferences=preferences, detail_fields=detail_fields
+        )
+        constraint_results = [result for _, result in constraint_checks]
+        judge_result = self._llm_judge.judge(
+            job_detail_fields=detail_fields,
+            candidate_snapshot=self.get_candidate_snapshot(),
+        )
+        assessment = MatchAssessment(
+            job_posting_id=job_posting_id,
+            hard_constraint_outcome=overall_hard_constraint(constraint_results),
+            hard_constraints=[
+                NamedConstraintResult(name=name, result=result)
+                for name, result in constraint_checks
+            ],
+            relevance=judge_result.relevance,
+            evidence=list(judge_result.evidence),
+        )
+        self._catalog_store.save_match_assessment(assessment)
+
+
+def _passes_default_filter(
+    summary: AssessmentSummary,
+    *,
+    include_closed: bool,
+    include_passed_deadlines: bool,
+) -> bool:
+    closed_ok = summary.listing_status != "Closed" or include_closed
+    passed_ok = summary.deadline_status != "Passed" or include_passed_deadlines
+    return closed_ok and passed_ok
+
+
+def _summary_sort_key(summary: AssessmentSummary) -> tuple[int, int, int, str, str]:
+    # Pending after assessed; Hard Constraint fail after pass/unknown;
+    # Relevance Strong → Mixed → Weak; sooner deadline first.
+    pending_rank = 1 if summary.pending else 0
+    hc_rank = 1 if summary.hard_constraint_outcome == "fail" else 0
+    relevance_rank = {
+        "Strong": 0,
+        "Mixed": 1,
+        "Weak": 2,
+        None: 3,
+    }.get(summary.relevance, 3)
+    deadline_key = summary.application_deadline or "9999-99-99"
+    return (pending_rank, hc_rank, relevance_rank, deadline_key, summary.job_posting_id)
 
 
 def _list_fingerprint(entry: JobListEntry) -> str:

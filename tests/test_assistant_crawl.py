@@ -291,7 +291,10 @@ def test_assistant_narrow_filters_do_not_mark_absent_postings_closed(
     outcome = assistant.run_crawl()
 
     assert outcome.status == "completed"
-    by_id = {row.job_posting_id: row for row in assistant.list_assessment_summaries()}
+    by_id = {
+        row.job_posting_id: row
+        for row in assistant.list_assessment_summaries(include_closed=True)
+    }
     assert by_id["keep"].listing_status == "Open"
     assert by_id["gone-from-narrow"].listing_status == "Open"
 
@@ -336,7 +339,10 @@ def test_assistant_closing_capable_crawl_marks_absent_postings_closed(
     outcome = assistant.run_crawl()
 
     assert outcome.status == "completed"
-    by_id = {row.job_posting_id: row for row in assistant.list_assessment_summaries()}
+    by_id = {
+        row.job_posting_id: row
+        for row in assistant.list_assessment_summaries(include_closed=True)
+    }
     assert by_id["keep"].listing_status == "Open"
     assert by_id["gone"].listing_status == "Closed"
 
@@ -359,7 +365,10 @@ def test_assistant_reopens_closed_posting_when_it_reappears_on_list(
 
     job_board.set_list_entries([])
     assert assistant.run_crawl().status == "completed"
-    assert assistant.list_assessment_summaries()[0].listing_status == "Closed"
+    assert (
+        assistant.list_assessment_summaries(include_closed=True)[0].listing_status
+        == "Closed"
+    )
 
     job_board.set_list_entries([entry])
     job_board.fetch_detail_ids.clear()
@@ -413,7 +422,10 @@ def test_assistant_auth_loss_mid_crawl_is_partial_success_without_closing(
 
     assert outcome.status == "partial_success"
     assert outcome.stored_count == 1
-    by_id = {row.job_posting_id: row for row in assistant.list_assessment_summaries()}
+    by_id = {
+        row.job_posting_id: row
+        for row in assistant.list_assessment_summaries(include_closed=True)
+    }
     assert by_id["a"].listing_status == "Open"
     assert "b" not in by_id
     assert by_id["untouched"].listing_status == "Open"
