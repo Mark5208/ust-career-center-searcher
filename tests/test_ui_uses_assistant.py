@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from job_finding_assistant.assistant import (
     AssessmentSummary,
     Assistant,
+    CrawlFilters,
+    CrawlOutcome,
     GapTolerance,
     LanguagePreference,
     Preferences,
@@ -31,8 +33,12 @@ class _RecordingAssistant:
         self.master_cv_path: str | None = None
         self.snapshot: CandidateSnapshot | None = None
         self.preferences = Preferences(languages=[], locations=[], gap_tolerance=None)
+        self.crawl_filters = CrawlFilters()
         self.set_master_cv_calls: list[str] = []
         self.update_preferences_calls: list[Preferences] = []
+        self.login_calls = 0
+        self.crawl_calls: list[bool] = []
+        self._can_start_crawl = False
 
     def list_assessment_summaries(self) -> list[AssessmentSummary]:
         self.list_calls += 1
@@ -54,6 +60,23 @@ class _RecordingAssistant:
     def update_preferences(self, preferences: Preferences) -> None:
         self.update_preferences_calls.append(preferences)
         self.preferences = preferences
+
+    def get_crawl_filters(self) -> CrawlFilters:
+        return self.crawl_filters
+
+    def update_crawl_filters(self, filters: CrawlFilters) -> None:
+        self.crawl_filters = filters
+
+    def start_user_attended_login(self) -> None:
+        self.login_calls += 1
+        self._can_start_crawl = True
+
+    def can_start_crawl(self) -> bool:
+        return self._can_start_crawl
+
+    def run_crawl(self, *, full_refresh: bool = False) -> CrawlOutcome:
+        self.crawl_calls.append(full_refresh)
+        return CrawlOutcome(status="completed", stored_count=0)
 
 
 def test_catalog_page_calls_assistant_and_shows_empty_job_postings_state() -> None:
@@ -159,3 +182,39 @@ def test_candidate_page_posts_master_cv_path_and_preferences_through_assistant(
     assert preferences.gap_tolerance is GapTolerance.SEMESTER
     page = client.get("/candidate")
     assert "Python" in page.text
+
+
+def test_crawl_page_uses_assistant_for_login_filters_and_run() -> None:
+    assistant = _RecordingAssistant()
+    client = TestClient(create_app(assistant))
+
+    page = client.get("/crawl")
+    assert page.status_code == 200
+    assert "User-Attended Login" in page.text
+    assert "Crawl Filters" in page.text
+    assert "finish DUO" in page.text
+
+    login = client.post("/crawl/login", follow_redirects=False)
+    assert login.status_code == 303
+    assert assistant.login_calls == 1
+
+    filters = client.post(
+        "/crawl/filters",
+        data={
+            "business_natures": "IT",
+            "active_job": "1",
+            "deadline_hardline": "2026-09-01",
+        },
+        follow_redirects=False,
+    )
+    assert filters.status_code == 303
+    assert assistant.crawl_filters.business_natures == ("IT",)
+    assert assistant.crawl_filters.active_job is True
+    assert assistant.crawl_filters.deadline_hardline is not None
+    assert assistant.crawl_filters.deadline_hardline.isoformat() == "2026-09-01"
+
+    run = client.post("/crawl/run", data={"full_refresh": "1"}, follow_redirects=False)
+    assert run.status_code == 303
+    assert assistant.crawl_calls == [True]
+    after = client.get("/crawl")
+    assert "Last Crawl: completed" in after.text

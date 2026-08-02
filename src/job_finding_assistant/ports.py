@@ -3,14 +3,25 @@
 from typing import Protocol, runtime_checkable
 
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
+from job_finding_assistant.crawl_filters import CrawlFilters
+from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
 
 
 @runtime_checkable
 class JobBoardSession(Protocol):
     """Playwright-backed Job Board session for User-Attended Login and Crawl."""
 
+    def open_login(self) -> None:
+        """Open the browser for User-Attended Login (no passwords stored)."""
+
     def is_authenticated(self) -> bool:
         """Return whether the Job Board session is ready for a Crawl."""
+
+    def discover_job_list(self, filters: CrawlFilters) -> list[JobListEntry]:
+        """Apply Crawl Filters on the board and return list rows (paginated)."""
+
+    def fetch_job_detail(self, job_posting_id: str) -> JobPostingDetail:
+        """Fetch one Job Posting detail page for catalog storage."""
 
 
 @runtime_checkable

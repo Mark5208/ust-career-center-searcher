@@ -17,3 +17,14 @@ Through `Assistant` and `/candidate` UI:
 - Set/update Master CV LaTeX path; never overwrite the Master CV file (`DiskMasterCvStore` reads only).
 - Rebuild inspectable Candidate Snapshot from Master CV sections (contact, education, experience, projects, skills/tools as written); not hand-editable.
 - Persist Preferences (languages with optional level, locations, Gap Tolerance None/Semester/Year/Any/unset) in SQLite; no Crawl Filters on Preferences.
+
+## Crawl slice (issue #4)
+
+Through `Assistant` and `/crawl` UI, with primary tests on a fake `JobBoardSession`:
+
+- User-Attended Login opens the browser; Crawl starts only when authenticated; no board passwords stored (ADR-0004).
+- Crawl Filters (seven groups + three checkboxes + optional Deadline Hardline) default to Active Job on; persist separately from Preferences.
+- Incremental Crawl and Full Refresh upsert Job Postings from detail fetch; Hardline skips detail/add after list discovery.
+- Narrow filters only add/update; Closing-capable (unfiltered or Active-Job-only) completed syncs may mark absent Open postings Closed.
+- Auth-loss mid-Crawl → partial success; keep stored work; do not mark untouched postings Closed.
+- Live board: Playwright `JobBoardSession` using selectors from `.scratch/job-board-dom.md`.
