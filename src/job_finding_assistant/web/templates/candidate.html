@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Candidate — Job Finding Assistant</title>
+    <style>
+      :root {
+        --ink: #1a2332;
+        --muted: #5a6570;
+        --paper: #f3f6f8;
+        --line: #d5dde3;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse at top left, #e8eef3 0%, transparent 55%),
+          linear-gradient(180deg, #dfe8ee 0%, var(--paper) 40%, #eef2f4 100%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+      }
+      nav a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+      nav a:hover {
+        color: var(--ink);
+      }
+      h1 {
+        font-size: 2.25rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0.75rem 0 0.35rem;
+      }
+      h2 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 2rem 0 0.75rem;
+      }
+      p,
+      label,
+      li,
+      dd {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      p {
+        margin: 0;
+      }
+      form {
+        margin-top: 0.75rem;
+      }
+      label {
+        display: block;
+        margin-bottom: 0.35rem;
+        font-size: 0.95rem;
+      }
+      input[type="text"],
+      textarea,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 0.75rem;
+        padding: 0.55rem 0.65rem;
+        border: 1px solid var(--line);
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--ink);
+        font: inherit;
+      }
+      button {
+        font: inherit;
+        padding: 0.45rem 0.9rem;
+        border: 1px solid var(--ink);
+        background: var(--ink);
+        color: #f7fafc;
+        cursor: pointer;
+      }
+      dl {
+        margin: 0.5rem 0 0;
+      }
+      dt {
+        font-weight: 600;
+        margin-top: 0.75rem;
+      }
+      dd {
+        margin: 0.25rem 0 0;
+      }
+      .empty {
+        margin-top: 0.5rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--line);
+      }
+      .hint {
+        font-size: 0.9rem;
+        margin-bottom: 0.75rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav><a href="/">Assessment Summary</a></nav>
+      <h1>Job Finding Assistant</h1>
+      <p>Master CV path, inspectable Candidate Snapshot, and Preferences.</p>
+
+      <h2>Master CV</h2>
+      <p class="hint">The tool never overwrites your Master CV file.</p>
+      <form method="post" action="/candidate/master-cv">
+        <label for="master_cv_path">Master CV LaTeX path</label>
+        <input
+          id="master_cv_path"
+          name="master_cv_path"
+          type="text"
+          value="{{ master_cv_path }}"
+          required
+        />
+        <button type="submit">Set Master CV path</button>
+      </form>
+
+      <h2>Candidate Snapshot</h2>
+      <p class="hint">Derived from the Master CV — inspectable, not hand-editable.</p>
+      {% if snapshot %}
+      <dl>
+        <dt>Contact</dt>
+        <dd>{{ snapshot.contact or "—" }}</dd>
+        <dt>Education</dt>
+        <dd>
+          {% if snapshot.education %}
+          <ul>
+            {% for item in snapshot.education %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}—{% endif %}
+        </dd>
+        <dt>Experience</dt>
+        <dd>
+          {% if snapshot.experience %}
+          <ul>
+            {% for item in snapshot.experience %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}—{% endif %}
+        </dd>
+        <dt>Projects</dt>
+        <dd>
+          {% if snapshot.projects %}
+          <ul>
+            {% for item in snapshot.projects %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}—{% endif %}
+        </dd>
+        <dt>Skills / tools</dt>
+        <dd>
+          {% if snapshot.skills_tools %}
+          <ul>
+            {% for item in snapshot.skills_tools %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}—{% endif %}
+        </dd>
+      </dl>
+      {% else %}
+      <p class="empty">No Candidate Snapshot yet. Set a Master CV path to rebuild it.</p>
+      {% endif %}
+
+      <h2>Preferences</h2>
+      <p class="hint">
+        Hard Constraint inputs only (languages, locations, Gap Tolerance). Empty fields leave
+        related Hard Constraints unknown later.
+      </p>
+      <form method="post" action="/candidate/preferences">
+        <label for="languages">Languages (one per line; optional level after a colon)</label>
+        <textarea id="languages" name="languages" rows="4">{{ languages_text }}</textarea>
+        <label for="locations">Acceptable work locations (one per line)</label>
+        <textarea id="locations" name="locations" rows="3">{{ locations_text }}</textarea>
+        <label for="gap_tolerance">Gap Tolerance</label>
+        <select id="gap_tolerance" name="gap_tolerance">
+          <option value="unset" {% if gap_tolerance == "unset" %}selected{% endif %}>Unset</option>
+          <option value="None" {% if gap_tolerance == "None" %}selected{% endif %}>None</option>
+          <option value="Semester" {% if gap_tolerance == "Semester" %}selected{% endif %}>
+            Semester
+          </option>
+          <option value="Year" {% if gap_tolerance == "Year" %}selected{% endif %}>Year</option>
+          <option value="Any" {% if gap_tolerance == "Any" %}selected{% endif %}>Any</option>
+        </select>
+        <button type="submit">Save Preferences</button>
+      </form>
+    </main>
+  </body>
+</html>
