@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Crawl — Job Finding Assistant</title>
+    <style>
+      :root {
+        --ink: #1a2332;
+        --muted: #5a6570;
+        --paper: #f3f6f8;
+        --line: #d5dde3;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse at top left, #e8eef3 0%, transparent 55%),
+          linear-gradient(180deg, #dfe8ee 0%, var(--paper) 40%, #eef2f4 100%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+      }
+      nav a {
+        color: var(--muted);
+        text-decoration: none;
+        margin-right: 1rem;
+      }
+      h1 {
+        font-size: 2.25rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.35rem;
+      }
+      h2 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 2rem 0 0.75rem;
+      }
+      p {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      label {
+        display: block;
+        margin: 0.75rem 0 0.25rem;
+        font-size: 0.95rem;
+      }
+      textarea,
+      input[type="date"],
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.45rem 0.5rem;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.7);
+        font: inherit;
+      }
+      .checks label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      button {
+        margin: 0.75rem 0.5rem 0 0;
+        padding: 0.5rem 0.9rem;
+        font: inherit;
+        border: 1px solid var(--line);
+        background: #fff;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .status {
+        margin-top: 1rem;
+        border-top: 1px solid var(--line);
+        padding-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href="/">Assessment Summary</a>
+        <a href="/candidate">Candidate</a>
+      </nav>
+      <h1>Crawl</h1>
+      <p>
+        User-Attended Login opens the Job Board browser. Finish DUO yourself, then start a Crawl.
+        No board passwords are stored.
+      </p>
+
+      <h2>User-Attended Login</h2>
+      <form method="post" action="/crawl/login">
+        <button type="submit">Open Job Board login</button>
+      </form>
+      <p class="status">
+        Crawl ready:
+        {% if can_start_crawl %}yes{% else %}no — finish DUO in the browser, then reload this page{% endif %}
+      </p>
+      <p><a href="/crawl">Refresh login status</a></p>
+
+      <h2>Crawl Filters</h2>
+      <p>Use Job Board option values (exact select values), one per line. Leave empty for no group filter.</p>
+      <form method="post" action="/crawl/filters">
+        <label>Business natures (one per line)
+          <textarea name="business_natures" rows="2">{{ business_natures }}</textarea>
+        </label>
+        <label>Job natures (one per line)
+          <textarea name="job_natures" rows="2">{{ job_natures }}</textarea>
+        </label>
+        <label>Employment types (one per line)
+          <textarea name="employment_types" rows="2">{{ employment_types }}</textarea>
+        </label>
+        <label>Working locations (one per line)
+          <textarea name="working_locations" rows="2">{{ working_locations }}</textarea>
+        </label>
+        <label>Levels of qualification (one per line)
+          <textarea name="levels_of_qualification" rows="2">{{ levels_of_qualification }}</textarea>
+        </label>
+        <label>Employment modes (one per line)
+          <textarea name="employment_modes" rows="2">{{ employment_modes }}</textarea>
+        </label>
+        <label>Languages (one per line)
+          <textarea name="languages" rows="2">{{ languages }}</textarea>
+        </label>
+        <div class="checks">
+          <label><input type="checkbox" name="talent_wise_employment_charter" value="1" {% if talent_wise_employment_charter %}checked{% endif %} /> Talent-Wise Employment Charter</label>
+          <label><input type="checkbox" name="active_job" value="1" {% if active_job %}checked{% endif %} /> Active Job</label>
+          <label><input type="checkbox" name="non_chinese_speaking_students" value="1" {% if non_chinese_speaking_students %}checked{% endif %} /> Non-Chinese speaking students would be considered</label>
+        </div>
+        <label>Deadline Hardline (optional)
+          <input type="date" name="deadline_hardline" value="{{ deadline_hardline }}" />
+        </label>
+        <button type="submit">Save Crawl Filters</button>
+      </form>
+
+      <h2>Run Crawl</h2>
+      <form method="post" action="/crawl/run" style="display:inline">
+        <input type="hidden" name="full_refresh" value="0" />
+        <button type="submit" {% if not can_start_crawl %}disabled{% endif %}>Incremental Crawl</button>
+      </form>
+      <form method="post" action="/crawl/run" style="display:inline">
+        <input type="hidden" name="full_refresh" value="1" />
+        <button type="submit" {% if not can_start_crawl %}disabled{% endif %}>Full Refresh</button>
+      </form>
+      {% if last_outcome %}
+      <p class="status">Last Crawl: {{ last_outcome.status }} (stored {{ last_outcome.stored_count }})</p>
+      {% endif %}
+    </main>
+  </body>
+</html>
