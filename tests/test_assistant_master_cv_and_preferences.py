@@ -79,6 +79,30 @@ def test_assistant_builds_candidate_snapshot_from_master_cv(tmp_path: Path) -> N
     assert snapshot.skills_tools == ["Python, LaTeX, SQLite"]
 
 
+def test_assistant_keeps_skills_and_tools_sections_as_written(tmp_path: Path) -> None:
+    master_cv_path = tmp_path / "master.tex"
+    master_cv_path.write_text(
+        r"""
+\documentclass{article}
+\begin{document}
+\section{Skills}
+Python, LaTeX
+
+\section{Tools}
+SQLite, Git
+\end{document}
+""",
+        encoding="utf-8",
+    )
+    assistant = _assistant(tmp_path)
+
+    assistant.set_master_cv_path(str(master_cv_path))
+    snapshot = assistant.get_candidate_snapshot()
+
+    assert snapshot is not None
+    assert snapshot.skills_tools == ["Python, LaTeX", "SQLite, Git"]
+
+
 def test_assistant_rebuilds_candidate_snapshot_when_master_cv_changes(tmp_path: Path) -> None:
     master_cv_path = tmp_path / "master.tex"
     master_cv_path.write_text(_SAMPLE_MASTER_CV, encoding="utf-8")
