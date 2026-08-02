@@ -2,6 +2,8 @@
 
 from typing import Protocol, runtime_checkable
 
+from job_finding_assistant.candidate_snapshot import CandidateSnapshot
+
 
 @runtime_checkable
 class JobBoardSession(Protocol):
@@ -17,6 +19,12 @@ class MasterCvStore(Protocol):
 
     def master_cv_path(self) -> str | None:
         """Return the configured Master CV path, if any."""
+
+    def set_master_cv_path(self, path: str) -> None:
+        """Set the Master CV LaTeX path without modifying that file."""
+
+    def candidate_snapshot(self) -> CandidateSnapshot | None:
+        """Return the Candidate Snapshot rebuilt from the Master CV, if any."""
 
 
 @runtime_checkable

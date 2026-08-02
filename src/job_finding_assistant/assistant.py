@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.ports import JobBoardSession, LlmCvTailor, LlmJudge, MasterCvStore
+from job_finding_assistant.preferences import GapTolerance, LanguagePreference, Preferences
+
+__all__ = [
+    "AssessmentSummary",
+    "Assistant",
+    "GapTolerance",
+    "LanguagePreference",
+    "Preferences",
+]
 
 
 @dataclass(frozen=True)
@@ -55,3 +65,23 @@ class Assistant:
             )
             for row in rows
         ]
+
+    def set_master_cv_path(self, path: str) -> None:
+        """Point at a Master CV LaTeX file; never overwrites that file."""
+        self._master_cv.set_master_cv_path(path)
+
+    def get_master_cv_path(self) -> str | None:
+        """Return the configured Master CV path, if any."""
+        return self._master_cv.master_cv_path()
+
+    def get_candidate_snapshot(self) -> CandidateSnapshot | None:
+        """Return the inspectable Candidate Snapshot (not hand-editable)."""
+        return self._master_cv.candidate_snapshot()
+
+    def get_preferences(self) -> Preferences:
+        """Return persisted Preferences (empty fields leave Hard Constraints unknown later)."""
+        return self._catalog_store.get_preferences()
+
+    def update_preferences(self, preferences: Preferences) -> None:
+        """Replace Preferences (languages, locations, Gap Tolerance — not Crawl Filters)."""
+        self._catalog_store.save_preferences(preferences)
