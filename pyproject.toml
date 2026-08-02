@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "job-finding-assistant"
+version = "0.1.0"
+description = "Personal local Job Finding Assistant for the HKUST Career Center Job Board"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "jinja2>=3.1.0",
+  "uvicorn[standard]>=0.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27.0",
+  "mypy>=1.13.0",
+  "pytest>=8.0.0",
+  "ruff>=0.8.0",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["job_finding_assistant"]
+
+[project.scripts]
+job-finding-assistant = "job_finding_assistant.web.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+job_finding_assistant = ["web/templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

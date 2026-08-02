@@ -1,0 +1,3 @@
+# Preferences hold hard-constraint facts
+
+Language ability, acceptable work locations, and how much study gap a job may require are often missing from a CV, so Hard Constraints cannot rely on the Master CV alone. Preferences hold those facts (languages, locations, Gap Tolerance); empty fields leave the related Hard Constraint unknown, never fail. Job Board search narrowing is a separate concept — Crawl Filters — and must not be mixed into Preferences. Experience and skills for Relevance, Evidence, and Tailored CVs still come from the Master CV via an inspectable, non-editable Candidate Snapshot.

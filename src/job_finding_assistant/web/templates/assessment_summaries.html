@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Job Finding Assistant</title>
+    <style>
+      :root {
+        --ink: #1a2332;
+        --muted: #5a6570;
+        --paper: #f3f6f8;
+        --line: #d5dde3;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse at top left, #e8eef3 0%, transparent 55%),
+          linear-gradient(180deg, #dfe8ee 0%, var(--paper) 40%, #eef2f4 100%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+      }
+      h1 {
+        font-size: 2.25rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.35rem;
+      }
+      h2 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 2rem 0 0.75rem;
+      }
+      p {
+        color: var(--muted);
+        line-height: 1.5;
+        margin: 0;
+      }
+      .empty {
+        margin-top: 1rem;
+        padding: 1.25rem 0;
+        border-top: 1px solid var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Job Finding Assistant</h1>
+      <p>Local catalog of Job Postings from the HKUST Job Board.</p>
+      <h2>Assessment Summary</h2>
+      {% if summaries %}
+      <ul>
+        {% for summary in summaries %}
+        <li>{{ summary.title }} — {{ summary.employer }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No Job Postings in the catalog yet.</p>
+      {% endif %}
+    </main>
+  </body>
+</html>
