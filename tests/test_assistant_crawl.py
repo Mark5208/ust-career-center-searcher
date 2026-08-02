@@ -6,17 +6,20 @@ from pathlib import Path
 from job_finding_assistant.assistant import Assistant, CrawlFilters
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.fakes import (
+    FakeCrawlPacer,
     FakeJobBoardSession,
     FakeLlmCvTailor,
     FakeLlmJudge,
     FakeMasterCvStore,
 )
+from job_finding_assistant.job_board import JobListEntry
 
 
 def _assistant(
     tmp_path: Path,
     *,
     job_board: FakeJobBoardSession | None = None,
+    crawl_pacer: FakeCrawlPacer | None = None,
 ) -> Assistant:
     return Assistant(
         catalog_store=CatalogStore(tmp_path / "catalog.db"),
@@ -24,6 +27,7 @@ def _assistant(
         master_cv=FakeMasterCvStore(),
         llm_judge=FakeLlmJudge(),
         llm_cv_tailor=FakeLlmCvTailor(),
+        crawl_pacer=crawl_pacer or FakeCrawlPacer(),
     )
 
 
@@ -133,6 +137,61 @@ def test_assistant_incremental_crawl_stores_job_postings_in_catalog(tmp_path: Pa
     assert second.status == "completed"
     assert second.stored_count == 0
     assert job_board.fetch_detail_ids == []
+
+
+def test_assistant_pauses_before_each_detail_fetch(tmp_path: Path) -> None:
+    job_board = FakeJobBoardSession(
+        authenticated=True,
+        list_entries=[
+            JobListEntry(
+                id="1",
+                title="Role One",
+                employer="Acme",
+                application_deadline="2026-12-31",
+            ),
+            JobListEntry(
+                id="2",
+                title="Role Two",
+                employer="Acme",
+                application_deadline="2026-12-31",
+            ),
+        ],
+    )
+    pacer = FakeCrawlPacer()
+    assistant = _assistant(tmp_path, job_board=job_board, crawl_pacer=pacer)
+
+    outcome = assistant.run_crawl()
+
+    assert outcome.status == "completed"
+    assert outcome.stored_count == 2
+    assert pacer.before_detail_calls == 2
+    assert pacer.before_detail_ranges == [(1.0, 3.0), (1.0, 3.0)]
+
+
+def test_assistant_does_not_pause_when_incremental_skips_unchanged_detail(
+    tmp_path: Path,
+) -> None:
+    entry = JobListEntry(
+        id="86534",
+        title="System Engineer",
+        employer="Example Corp",
+        posting_date="2026-07-01",
+        application_deadline="2026-12-31",
+    )
+    job_board = FakeJobBoardSession(authenticated=True, list_entries=[entry])
+    pacer = FakeCrawlPacer()
+    assistant = _assistant(tmp_path, job_board=job_board, crawl_pacer=pacer)
+    assert assistant.run_crawl().stored_count == 1
+    assert pacer.before_detail_calls == 1
+    pacer.before_detail_calls = 0
+    pacer.before_detail_ranges.clear()
+
+    outcome = assistant.run_crawl()
+
+    assert outcome.status == "completed"
+    assert outcome.stored_count == 0
+    assert pacer.before_detail_calls == 0
+    assert pacer.before_detail_ranges == []
 
 
 def test_assistant_deadline_hardline_skips_detail_fetch_and_catalog_add(

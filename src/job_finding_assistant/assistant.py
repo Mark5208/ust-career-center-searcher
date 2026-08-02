@@ -9,8 +9,15 @@ from datetime import UTC, date, datetime
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.crawl_filters import CrawlFilters
+from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
-from job_finding_assistant.ports import JobBoardSession, LlmCvTailor, LlmJudge, MasterCvStore
+from job_finding_assistant.ports import (
+    CrawlPacer,
+    JobBoardSession,
+    LlmCvTailor,
+    LlmJudge,
+    MasterCvStore,
+)
 from job_finding_assistant.preferences import GapTolerance, LanguagePreference, Preferences
 
 __all__ = [
@@ -50,12 +57,14 @@ class Assistant:
         master_cv: MasterCvStore,
         llm_judge: LlmJudge,
         llm_cv_tailor: LlmCvTailor,
+        crawl_pacer: CrawlPacer | None = None,
     ) -> None:
         self._catalog_store = catalog_store
         self._job_board = job_board
         self._master_cv = master_cv
         self._llm_judge = llm_judge
         self._llm_cv_tailor = llm_cv_tailor
+        self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
 
     def list_assessment_summaries(self) -> list[AssessmentSummary]:
         """Return Assessment Summaries for Job Postings in the local catalog."""
@@ -136,6 +145,7 @@ class Assistant:
                     if existing.get("listing_status") != "Open":
                         self._catalog_store.set_listing_status(entry.id, "Open")
                     continue
+                self._crawl_pacer.pause_before_detail()
                 detail = self._job_board.fetch_job_detail(entry.id)
                 self._catalog_store.upsert_job_posting(
                     job_posting_id=detail.id,

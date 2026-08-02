@@ -28,3 +28,4 @@ Through `Assistant` and `/crawl` UI, with primary tests on a fake `JobBoardSessi
 - Narrow filters only add/update; Closing-capable (unfiltered or Active-Job-only) completed syncs may mark absent Open postings Closed.
 - Auth-loss mid-Crawl → partial success; keep stored work; do not mark untouched postings Closed.
 - Live board: Playwright `JobBoardSession` using selectors from `.scratch/job-board-dom.md`.
+- `CrawlPacer` random delays before detail fetches and between list pages (tested via recording fake; no real sleep in primary tests).

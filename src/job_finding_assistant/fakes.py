@@ -7,6 +7,28 @@ from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
 
 
+class FakeCrawlPacer:
+    """Records pause requests without sleeping (time boundary fake)."""
+
+    def __init__(self) -> None:
+        self.before_detail_calls = 0
+        self.before_detail_ranges: list[tuple[float, float]] = []
+        self.before_next_page_calls = 0
+        self.before_next_page_ranges: list[tuple[float, float]] = []
+
+    def pause_before_detail(self) -> None:
+        from job_finding_assistant.crawl_pacer import DETAIL_PAUSE_RANGE
+
+        self.before_detail_calls += 1
+        self.before_detail_ranges.append(DETAIL_PAUSE_RANGE)
+
+    def pause_before_next_page(self) -> None:
+        from job_finding_assistant.crawl_pacer import NEXT_PAGE_PAUSE_RANGE
+
+        self.before_next_page_calls += 1
+        self.before_next_page_ranges.append(NEXT_PAGE_PAUSE_RANGE)
+
+
 class FakeJobBoardSession:
     def __init__(
         self,

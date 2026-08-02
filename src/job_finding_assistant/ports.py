@@ -25,6 +25,17 @@ class JobBoardSession(Protocol):
 
 
 @runtime_checkable
+class CrawlPacer(Protocol):
+    """Time boundary for human-like pauses during Crawl (no real sleep in tests)."""
+
+    def pause_before_detail(self) -> None:
+        """Pause before fetching one Job Posting detail page."""
+
+    def pause_before_next_page(self) -> None:
+        """Pause before advancing to the next Job Board list page."""
+
+
+@runtime_checkable
 class MasterCvStore(Protocol):
     """Reads Master CV LaTeX and rebuilds the Candidate Snapshot."""
 
