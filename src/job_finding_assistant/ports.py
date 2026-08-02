@@ -5,6 +5,7 @@ from typing import Protocol, runtime_checkable
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
+from job_finding_assistant.match_assessment import JudgeResult
 
 
 @runtime_checkable
@@ -55,6 +56,14 @@ class LlmJudge(Protocol):
 
     def available(self) -> bool:
         """Return whether the judge port can be used."""
+
+    def judge(
+        self,
+        *,
+        job_detail_fields: dict[str, str],
+        candidate_snapshot: CandidateSnapshot | None,
+    ) -> JudgeResult:
+        """Return Relevance and Evidence for one Job Posting."""
 
 
 @runtime_checkable

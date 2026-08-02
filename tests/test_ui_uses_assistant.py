@@ -30,6 +30,9 @@ class _RecordingAssistant:
 
     def __init__(self) -> None:
         self.list_calls = 0
+        self.list_kwargs: dict[str, bool] = {}
+        self.summaries: list[AssessmentSummary] = []
+        self.can_prepare_calls: list[str] = []
         self.master_cv_path: str | None = None
         self.snapshot: CandidateSnapshot | None = None
         self.preferences = Preferences(languages=[], locations=[], gap_tolerance=None)
@@ -40,9 +43,26 @@ class _RecordingAssistant:
         self.crawl_calls: list[bool] = []
         self._can_start_crawl = False
 
-    def list_assessment_summaries(self) -> list[AssessmentSummary]:
+    def list_assessment_summaries(
+        self,
+        *,
+        include_closed: bool = False,
+        include_passed_deadlines: bool = False,
+    ) -> list[AssessmentSummary]:
         self.list_calls += 1
-        return []
+        self.list_kwargs = {
+            "include_closed": include_closed,
+            "include_passed_deadlines": include_passed_deadlines,
+        }
+        return list(self.summaries)
+
+    def can_prepare(self, job_posting_id: str) -> bool:
+        self.can_prepare_calls.append(job_posting_id)
+        for row in self.summaries:
+            if row.job_posting_id != job_posting_id:
+                continue
+            return not (row.pending or row.hard_constraint_outcome == "fail")
+        return False
 
     def get_master_cv_path(self) -> str | None:
         return self.master_cv_path
@@ -87,8 +107,63 @@ def test_catalog_page_calls_assistant_and_shows_empty_job_postings_state() -> No
 
     assert response.status_code == 200
     assert assistant.list_calls == 1
+    assert assistant.list_kwargs == {
+        "include_closed": False,
+        "include_passed_deadlines": False,
+    }
     assert "Assessment Summary" in response.text
     assert "No Job Postings" in response.text
+
+
+def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pending() -> None:
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=True,
+        ),
+        AssessmentSummary(
+            job_posting_id="86535",
+            title="Analyst",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="pass",
+            relevance="Strong",
+        ),
+    ]
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "System Engineer" in response.text
+    assert "Example Corp" in response.text
+    assert "Pending" in response.text
+    assert "Prepare unavailable" in response.text
+    assert "Strong" in response.text
+    assert "pass" in response.text
+    assert assistant.can_prepare_calls == ["86534", "86535"]
+
+
+def test_catalog_page_passes_closed_and_passed_toggles_to_assistant() -> None:
+    assistant = _RecordingAssistant()
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/?include_closed=1&include_passed_deadlines=1")
+
+    assert response.status_code == 200
+    assert assistant.list_kwargs == {
+        "include_closed": True,
+        "include_passed_deadlines": True,
+    }
+    assert "include_closed" in response.text
+    assert "include_passed_deadlines" in response.text
 
 
 def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -> None:

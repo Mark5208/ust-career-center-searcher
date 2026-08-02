@@ -4,10 +4,11 @@
 
 - **UI:** FastAPI + Jinja, single-user local server (`job_finding_assistant.web.app`).
 - **Application seam:** `Assistant` — the only surface the UI and automated tests call.
-- **Persistence:** SQLite via `CatalogStore` (Job Postings, Preferences, Crawl Filters; later Match Assessments / Preparation Packet metadata).
+- **Persistence:** SQLite via `CatalogStore` (Job Postings, Preferences, Crawl Filters, Match Assessments; later Preparation Packet metadata).
 - **Master CV:** LaTeX on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the `.tex` file).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests.
 - **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
+- **Hard Constraints:** pure rules in `hard_constraints` (language, location, Gap Tolerance).
 - **LLM ports:** `LlmJudge` (Relevance / Evidence), `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary); faked in tests.
 
 ```
@@ -15,6 +16,7 @@ Browser → FastAPI/Jinja → Assistant → CatalogStore (SQLite)
                               ├→ JobBoardSession (Playwright live / Fake in tests)
                               ├→ CrawlPacer (Random live / Fake or NoOp in tests)
                               ├→ MasterCvStore (DiskMasterCvStore)
+                              ├→ hard_constraints (pure rules)
                               ├→ LlmJudge
                               └→ LlmCvTailor
 ```
@@ -47,13 +49,22 @@ CREATE TABLE IF NOT EXISTS crawl_filters (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     filters_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS match_assessments (
+    job_posting_id TEXT PRIMARY KEY,
+    hard_constraint_outcome TEXT NOT NULL,
+    hard_constraints_json TEXT NOT NULL,
+    relevance TEXT NOT NULL,
+    evidence_json TEXT NOT NULL
+);
 ```
 
 `listing_status` and `deadline_status` follow glossary values (Open/Closed; Upcoming/Passed/Unknown).
 `gap_tolerance` is `None` / `Semester` / `Year` / `Any`, or SQL NULL when unset.
 `list_fingerprint` supports incremental Crawl skip when list row facts are unchanged.
 `detail_json` stores structured detail fields (including Evidence-rich text) from the detail page.
-Assessment and Preparation Packet tables arrive in later slices.
+`match_assessments` rows are rebuilt for new/changed Crawl detail and for Open postings when Master CV or Preferences change; absence means Pending.
+Preparation Packet tables arrive in a later slice (`has_preparation_packet` / Stale remain false for now).
 
 ## Package layout
 
@@ -62,6 +73,8 @@ src/job_finding_assistant/
   assistant.py              # Assistant + AssessmentSummary + CrawlOutcome
   crawl_filters.py          # CrawlFilters (+ Closing-capable check)
   crawl_pacer.py            # RandomCrawlPacer / NoOpCrawlPacer delay ranges
+  hard_constraints.py       # Language / location / Gap Tolerance rules
+  match_assessment.py       # MatchAssessment, EvidencePair, JudgeResult
   job_board.py              # JobListEntry, JobPostingDetail, AuthLostError, CrawlOutcome
   playwright_job_board.py   # Live Playwright JobBoardSession
   preferences.py            # Preferences, LanguagePreference, GapTolerance
@@ -73,12 +86,12 @@ src/job_finding_assistant/
   web/
     app.py                  # create_app(assistant), main()
     templates/              # Jinja pages (catalog + candidate + crawl)
-tests/                      # Behavior through Assistant (+ UI→Assistant)
+tests/                      # Behavior through Assistant (+ UI→Assistant; HC pure rules)
 ```
 
-## Candidate / Preferences / Crawl UI
+## Candidate / Preferences / Crawl / Assessment UI
 
-- `/` — Assessment Summary list
+- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare gate)
 - `/candidate` — set Master CV path, inspect Candidate Snapshot, edit Preferences
 - `/crawl` — User-Attended Login, Crawl Filters, Incremental Crawl / Full Refresh
 - POST `/candidate/master-cv`, POST `/candidate/preferences` — mutate only via Assistant
@@ -94,4 +107,3 @@ pytest
 ```
 
 Live Crawls intentionally wait randomly between Job Board list pages and detail fetches to reduce bursty request patterns.
-
