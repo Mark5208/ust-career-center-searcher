@@ -36,23 +36,24 @@ _SECTION_ALIASES: dict[str, str] = {
 
 def build_candidate_snapshot(latex: str) -> CandidateSnapshot:
     """Parse section bodies from Master CV LaTeX into a Candidate Snapshot."""
-    sections: dict[str, str] = {}
+    sections: dict[str, list[str]] = {}
     for match in _SECTION_RE.finditer(latex):
         title = match.group(1).strip().lower()
         body = match.group(2).strip()
         key = _SECTION_ALIASES.get(title)
-        if key is not None:
-            sections[key] = body
+        if key is None or not body:
+            continue
+        sections.setdefault(key, []).append(body)
 
     def entries(key: str) -> list[str]:
-        body = sections.get(key)
-        if not body:
-            return []
-        parts = [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
+        bodies = sections.get(key, [])
+        parts: list[str] = []
+        for body in bodies:
+            parts.extend(part.strip() for part in re.split(r"\n\s*\n", body) if part.strip())
         return parts
 
-    contact_body = sections.get("contact")
-    contact = contact_body.strip() if contact_body else None
+    contact_bodies = sections.get("contact", [])
+    contact = "\n\n".join(contact_bodies) if contact_bodies else None
     return CandidateSnapshot(
         contact=contact,
         education=entries("education"),
