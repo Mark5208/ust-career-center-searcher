@@ -1,0 +1,121 @@
+# Job Finding Assistant
+
+Personal local tool that crawls the HKUST Job Board, assesses fit against one user's Master CV and Preferences, and prepares a Tailored CV for selected Job Postings.
+
+## Language
+
+### Job catalog
+
+**Job Board**:
+The HKUST Career Center job board — the sole source of Job Postings in this context.
+_Avoid_: career site, portal, multiple boards
+
+**Job Posting**:
+One job listing from the Job Board, stored in the local catalog from its detail page (structured fields plus text for Evidence), with listing and deadline facts.
+_Avoid_: job, role, vacancy, opening (when referring to the stored listing)
+
+**User-Attended Login**:
+The tool opens the browser; the user completes Job Board login (including DUO); the user then starts a Crawl. No board passwords are stored.
+_Avoid_: auto-login, credentials file, stored session password
+
+**Crawl Filters**:
+User-chosen Job Board search criteria applied during a Crawl: the seven filter groups (Business natures, working locations, languages, job natures, employment types, levels of qualification, employment modes), the three checkboxes (Talent-Wise Employment Charter, Active Job, Non-Chinese speaking students would be considered), and an optional Deadline Hardline. Default is Active Job on, other filters empty, Hardline unset. Narrow filters only add or update matching postings; they never mark Closed.
+_Avoid_: search facets, scrape filters, board query
+
+**Crawl**:
+A user-started sync of the Job Board into the local catalog: apply Crawl Filters for list discovery, then detail-fetch new or changed postings (skipping add/detail when a Deadline Hardline excludes them). Default is incremental. Narrow filtered Crawls only add or update. A completed list sync with unfiltered or Active-Job-only scope may mark absent postings Closed. If auth is lost mid-Crawl, the run ends as partial success: keep what was stored; do not mark untouched postings Closed.
+_Avoid_: scrape run, sync job, harvest
+
+**Full Refresh**:
+A Crawl mode that re-fetches detail for every Open Job Posting in scope of the Crawl Filters (and Deadline Hardline if set), not only new or changed ones.
+_Avoid_: force sync, rebuild catalog, hard reset
+
+**Listing status**:
+Open or Closed for a Job Posting. Closed means absent from a completed Closing-capable list sync (unfiltered or Active-Job-only) — not merely “detail not fetched yet,” and not absence from a narrowly filtered Crawl.
+_Avoid_: expired, active, live (use Deadline status or Listing status explicitly)
+
+**Deadline status**:
+Whether the Job Posting's application deadline is Upcoming, Passed, or Unknown — independent of Listing status.
+_Avoid_: expired (alone), overdue
+
+**Deadline Hardline**:
+An optional Crawl Filter cutoff date; after list discovery, the Crawl skips detail fetch and catalog add for postings whose deadline falls before it. Unset means no extra deadline limit (Active Job may still apply).
+_Avoid_: filter, max age, crawl window
+
+**Delete**:
+The user removes a Job Posting and its related artifacts from the local catalog.
+_Avoid_: archive, hide, soft-delete
+
+### Candidate
+
+**Master CV**:
+The user's sole authored experience-and-skills document (LaTeX); never overwritten by the tool.
+_Avoid_: resume, profile, base CV
+
+**Preferences**:
+A sidecar for Hard Constraint inputs only — not Crawl Filters: languages spoken (optional level), acceptable work locations, and Gap Tolerance. Empty fields leave the related Hard Constraint unknown, never fail.
+_Avoid_: profile, settings, user config, visa, GPA, Crawl Filters
+
+**Gap Tolerance**:
+How much study interruption the user will accept for a job’s employment period: None, Semester, Year, or Any. Unset leaves the Gap Tolerance Hard Constraint unknown.
+_Avoid_: gap year flag, internship length preference (alone)
+
+**Candidate Snapshot**:
+A structured view derived from the Master CV for matching: contact if present, education, experience, projects, and skills/tools as written — no inferred skills, and no Preferences. Rebuilt when the Master CV changes; inspectable; not hand-edited (fix the Master CV instead).
+_Avoid_: profile, parsed CV (as a product concept), editable profile
+
+### Assessment
+
+**Hard Constraint**:
+A pass, fail, or unknown check using Preferences against the Job Posting for language, work location, or Gap Tolerance. Location passes if the posting’s work location is among acceptable locations, or is clearly remote and remote is accepted; fails on a definite mismatch; unknown if Preferences locations are empty or the posting location is missing/unclear. Language passes if every language the posting requires appears in Preferences; fails if a required language is missing; unknown if Preferences languages are empty or needs are unclear — “preferred” or vague language wording is not a hard require. Gap Tolerance fails when the posting’s employment period requires more study interruption than the user accepts; passes when within tolerance; unknown if Gap Tolerance is unset or the posting’s period impact is unclear. Unknown never counts as fail. Overall outcome for a posting: fail if any Hard Constraint fails; else pass if all that apply pass; else unknown.
+_Avoid_: requirement, filter, must-have (when meaning this check)
+
+**Assessment Summary**:
+The browse/list view of fit for one Job Posting: title, employer, Listing status, Deadline status, overall Hard Constraint outcome, Relevance band, and whether a Preparation Packet exists (and if Stale). Default catalog shows Open postings with Deadline Upcoming or Unknown; sorts by Relevance (Strong, then Mixed, then Weak) then sooner deadline; overall Hard Constraint fail sorts after pass and unknown; Closed and Deadline Passed are hidden by default but toggleable.
+_Avoid_: job card, list row, dashboard row
+
+**Pending**:
+Assessment Summary state when no Match Assessment exists yet — no Relevance or Evidence; Prepare is unavailable; Pending rows sort after assessed ones.
+_Avoid_: loading, unassessed, not ready (alone)
+
+**Match Assessment**:
+The full fit judgment for one Job Posting shown in detail: Hard Constraints with short reasons, Relevance, and Evidence pairs, with actions to Prepare, Override, or Delete. Rebuilt for postings that are new or whose detail changed in a Crawl; rebuilt for Open postings when the Master CV or Preferences change; otherwise the last Assessment is kept.
+_Avoid_: score, analysis, match result
+
+**Relevance**:
+Coarse fit band for soft factors: Strong, Mixed, or Weak — not a numeric score.
+_Avoid_: match score, percentage, ranking score
+
+**Evidence pair**:
+One justification unit: a Job Posting excerpt, a Master CV or Candidate Snapshot excerpt (or “not found”), and a one-line role — supports Relevance, weakens it, or explains a Hard Constraint.
+_Avoid_: quote pair, citation row
+
+**Evidence**:
+The short list of Evidence pairs in a Match Assessment (about three to seven) used to decide Prepare vs skip; deeper gaps belong in the Gap Report after prepare.
+_Avoid_: quote, reference, highlight (alone)
+
+**Gap Report**:
+Per Job Posting, a list of gaps: each item is a Requirement from the posting, a status (missing or partial), Evidence from the Master CV (or “not found”), and a non-fictional Suggestion. Hard Constraint failures appear when relevant (especially under Override). Never invents experience.
+_Avoid_: suggestions list, missing requirements (alone)
+
+### CV artifacts
+
+**Preparation Packet**:
+The prepare-to-apply output for one Job Posting: Match Assessment, Gap Report, Tailored CV, and Edit Summary. One current packet per posting; re-running prepare overwrites it after a warning.
+_Avoid_: application pack, draft bundle, apply kit
+
+**Tailored CV**:
+A per-Job-Posting LaTeX copy of the Master CV that may reorder, rephrase, emphasize, or omit real content, and may rewrite an existing summary section only. Never invents employers, dates, titles, or skills; preserves the Master CV’s LaTeX structure.
+_Avoid_: modified CV, generated resume, customized CV (when meaning this artifact)
+
+**Edit Summary**:
+A human-readable list of what the Tailored CV changed versus the Master CV (reorders, omissions, rephrases, summary tweaks) so the user can audit before applying.
+_Avoid_: diff log, changelog, patch notes
+
+**Stale**:
+A Preparation Packet that is outdated because the Master CV or Preferences changed after it was produced. Stale packets are not auto-regenerated; the user re-prepares deliberately.
+_Avoid_: outdated draft, invalid, expired packet
+
+**Override**:
+An explicit user choice to produce a Preparation Packet despite a Hard Constraint failure.
+_Avoid_: force, bypass, ignore constraints
