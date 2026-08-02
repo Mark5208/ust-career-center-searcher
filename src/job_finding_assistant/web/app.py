@@ -237,16 +237,19 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
 
 def build_default_assistant(db_path: Path | None = None) -> Assistant:
     """Wire CatalogStore and ports for local development (Playwright Job Board)."""
+    from job_finding_assistant.crawl_pacer import RandomCrawlPacer
     from job_finding_assistant.playwright_job_board import PlaywrightJobBoardSession
 
     data_dir = Path.home() / ".job_finding_assistant"
     catalog_path = db_path or data_dir / "catalog.db"
+    crawl_pacer = RandomCrawlPacer()
     return Assistant(
         catalog_store=CatalogStore(catalog_path),
-        job_board=PlaywrightJobBoardSession(headless=False),
+        job_board=PlaywrightJobBoardSession(headless=False, crawl_pacer=crawl_pacer),
         master_cv=DiskMasterCvStore(data_dir / "master_cv_state"),
         llm_judge=FakeLlmJudge(),
         llm_cv_tailor=FakeLlmCvTailor(),
+        crawl_pacer=crawl_pacer,
     )
 
 

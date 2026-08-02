@@ -11,7 +11,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from job_finding_assistant.crawl_filters import CrawlFilters
+from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
+from job_finding_assistant.ports import CrawlPacer
 
 JOB_BOARD_URL = "https://career.hkust.edu.hk/web/job.php"
 JOB_DETAIL_URL = "https://career.hkust.edu.hk/web/job_detail.php"
@@ -32,8 +34,14 @@ _JP_RE = re.compile(r"[?&]jp=(\d+)")
 class PlaywrightJobBoardSession:
     """Live HKUST Job Board session driven by Playwright (headed by default)."""
 
-    def __init__(self, *, headless: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        headless: bool = False,
+        crawl_pacer: CrawlPacer | None = None,
+    ) -> None:
         self._headless = headless
+        self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
         self._playwright: Any = None
         self._browser: Any = None
         self._context: Any = None
@@ -70,6 +78,7 @@ class PlaywrightJobBoardSession:
             next_link = self._page.locator("ul.pagination li.next a")
             if next_link.count() == 0:
                 break
+            self._crawl_pacer.pause_before_next_page()
             next_link.first.click()
             self._page.wait_for_selector("#job-list", state="attached")
         return entries

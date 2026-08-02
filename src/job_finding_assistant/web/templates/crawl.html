@@ -141,6 +141,7 @@
       </form>
 
       <h2>Run Crawl</h2>
+      <p>Live Crawls pause randomly between Job Board pages and detail fetches.</p>
       <form method="post" action="/crawl/run" style="display:inline">
         <input type="hidden" name="full_refresh" value="0" />
         <button type="submit" {% if not can_start_crawl %}disabled{% endif %}>Incremental Crawl</button>

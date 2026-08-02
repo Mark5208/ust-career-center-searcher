@@ -7,11 +7,13 @@
 - **Persistence:** SQLite via `CatalogStore` (Job Postings, Preferences, Crawl Filters; later Match Assessments / Preparation Packet metadata).
 - **Master CV:** LaTeX on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the `.tex` file).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests.
+- **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
 - **LLM ports:** `LlmJudge` (Relevance / Evidence), `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary); faked in tests.
 
 ```
 Browser → FastAPI/Jinja → Assistant → CatalogStore (SQLite)
                               ├→ JobBoardSession (Playwright live / Fake in tests)
+                              ├→ CrawlPacer (Random live / Fake or NoOp in tests)
                               ├→ MasterCvStore (DiskMasterCvStore)
                               ├→ LlmJudge
                               └→ LlmCvTailor
@@ -59,6 +61,7 @@ Assessment and Preparation Packet tables arrive in later slices.
 src/job_finding_assistant/
   assistant.py              # Assistant + AssessmentSummary + CrawlOutcome
   crawl_filters.py          # CrawlFilters (+ Closing-capable check)
+  crawl_pacer.py            # RandomCrawlPacer / NoOpCrawlPacer delay ranges
   job_board.py              # JobListEntry, JobPostingDetail, AuthLostError, CrawlOutcome
   playwright_job_board.py   # Live Playwright JobBoardSession
   preferences.py            # Preferences, LanguagePreference, GapTolerance
@@ -89,3 +92,6 @@ playwright install chromium   # once, for live Job Board
 job-finding-assistant          # http://127.0.0.1:8000
 pytest
 ```
+
+Live Crawls intentionally wait randomly between Job Board list pages and detail fetches to reduce bursty request patterns.
+
