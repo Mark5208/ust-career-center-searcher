@@ -9,6 +9,7 @@ from job_finding_assistant.assistant import (
     Assistant,
     CrawlFilters,
     CrawlOutcome,
+    PreparationPacketView,
 )
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
@@ -21,6 +22,11 @@ from job_finding_assistant.fakes import (
     FakeMasterCvStore,
 )
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
+from job_finding_assistant.preparation_packet import (
+    EditSummary,
+    GapReport,
+    PreparationPacket,
+)
 from job_finding_assistant.web.app import create_app
 
 
@@ -47,6 +53,9 @@ class _RecordingAssistant:
         self.login_calls = 0
         self.crawl_calls: list[bool] = []
         self._can_start_crawl = False
+        self.prepare_calls: list[str] = []
+        self.get_packet_calls: list[str] = []
+        self.packet_views: dict[str, PreparationPacketView] = {}
 
     def list_assessment_summaries(
         self,
@@ -68,6 +77,35 @@ class _RecordingAssistant:
                 continue
             return not row.pending
         return False
+
+    def prepare(
+        self,
+        job_posting_id: str,
+        *,
+        confirm_hard_constraint_fail: bool = False,
+        confirm_overwrite: bool = False,
+    ) -> PreparationPacket:
+        del confirm_hard_constraint_fail, confirm_overwrite
+        self.prepare_calls.append(job_posting_id)
+        return PreparationPacket(
+            job_posting_id=job_posting_id,
+            gap_report=GapReport(),
+            edit_summary=EditSummary(),
+            tailored_yaml="cv:\n  name: Tailored\n",
+            pdf_bytes=b"%PDF",
+        )
+
+    def get_preparation_packet(self, job_posting_id: str) -> PreparationPacketView | None:
+        self.get_packet_calls.append(job_posting_id)
+        return self.packet_views.get(job_posting_id)
+
+    def get_tailored_yaml(self, job_posting_id: str) -> str | None:
+        view = self.packet_views.get(job_posting_id)
+        return view.packet.tailored_yaml if view else None
+
+    def get_tailored_pdf(self, job_posting_id: str) -> bytes | None:
+        view = self.packet_views.get(job_posting_id)
+        return view.packet.pdf_bytes if view else None
 
     def rejudge_pending_assessments(self) -> None:
         self.rejudge_calls += 1
@@ -330,3 +368,70 @@ def test_crawl_page_uses_assistant_for_login_filters_and_run() -> None:
     assert assistant.crawl_calls == [True]
     after = client.get("/crawl")
     assert "Last Crawl: completed" in after.text
+
+
+def test_catalog_prepare_and_packet_routes_use_assistant() -> None:
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="pass",
+            preference="Strong",
+            relevance="Strong",
+            has_preparation_packet=False,
+        )
+    ]
+    client = TestClient(create_app(assistant))
+
+    catalog = client.get("/")
+    assert catalog.status_code == 200
+    assert "Prepare" in catalog.text
+    assert "Prepare unavailable" not in catalog.text
+
+    prepare = client.post("/jobs/86534/prepare", follow_redirects=False)
+    assert prepare.status_code == 303
+    assert prepare.headers["location"] == "/jobs/86534/packet"
+    assert assistant.prepare_calls == ["86534"]
+
+    packet = PreparationPacket(
+        job_posting_id="86534",
+        gap_report=GapReport(),
+        edit_summary=EditSummary(omissions=("Dropped unused bullet",)),
+        tailored_yaml="cv:\n  name: Tailored\n",
+        pdf_bytes=b"%PDF-1.4",
+    )
+    assistant.packet_views["86534"] = PreparationPacketView(
+        packet=packet, match_assessment=None
+    )
+    assistant.summaries[0] = AssessmentSummary(
+        job_posting_id="86534",
+        title="System Engineer",
+        employer="Example Corp",
+        listing_status="Open",
+        deadline_status="Upcoming",
+        pending=False,
+        hard_constraint_outcome="pass",
+        preference="Strong",
+        relevance="Strong",
+        has_preparation_packet=True,
+    )
+
+    view = client.get("/jobs/86534/packet")
+    assert view.status_code == 200
+    assert "Gap Report" in view.text
+    assert "Edit Summary" in view.text
+    assert "Dropped unused bullet" in view.text
+    assert "Download Tailored YAML" in view.text
+    assert "Download Tailored PDF" in view.text
+
+    yaml_resp = client.get("/jobs/86534/packet/yaml")
+    assert yaml_resp.status_code == 200
+    assert "Tailored" in yaml_resp.text
+    pdf_resp = client.get("/jobs/86534/packet/pdf")
+    assert pdf_resp.status_code == 200
+    assert pdf_resp.content.startswith(b"%PDF")

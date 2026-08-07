@@ -19,6 +19,12 @@ from job_finding_assistant.match_assessment import (
     RelevanceBand,
     RelevanceJudgment,
 )
+from job_finding_assistant.pdf_renderer import PdfRenderError
+from job_finding_assistant.preparation_packet import (
+    EditSummary,
+    GapReport,
+    TailorResult,
+)
 
 
 class FakeCrawlPacer:
@@ -299,5 +305,70 @@ class FakeLlmJudge:
 
 
 class FakeLlmCvTailor:
+    """Scripted Gap Report / Tailored YAML / Edit Summary for Prepare tests."""
+
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        result: TailorResult | None = None,
+        fail_on_call: bool = False,
+    ) -> None:
+        self._available = available
+        self._result = result or TailorResult(
+            gap_report=GapReport(),
+            edit_summary=EditSummary(),
+            tailored_yaml="cv:\n  name: Tailored\n  sections: {}\n",
+        )
+        self._fail_on_call = fail_on_call
+        self.tailor_calls = 0
+        self.tailor_inputs: list[dict[str, object]] = []
+
     def available(self) -> bool:
-        return False
+        return self._available
+
+    def tailor(
+        self,
+        *,
+        master_cv_yaml: str,
+        candidate_snapshot: CandidateSnapshot,
+        job_detail_fields: dict[str, str],
+        relevance_evidence: list[EvidencePair],
+        hard_constraint_outcome: ConstraintOutcome,
+        hard_constraint_reason: str,
+    ) -> TailorResult:
+        if not self._available or self._fail_on_call:
+            raise RuntimeError("FakeLlmCvTailor is not available")
+        self.tailor_calls += 1
+        self.tailor_inputs.append(
+            {
+                "master_cv_yaml": master_cv_yaml,
+                "candidate_snapshot": candidate_snapshot,
+                "job_detail_fields": dict(job_detail_fields),
+                "relevance_evidence": list(relevance_evidence),
+                "hard_constraint_outcome": hard_constraint_outcome,
+                "hard_constraint_reason": hard_constraint_reason,
+            }
+        )
+        return self._result
+
+
+class FakePdfRenderer:
+    """Scripted PDF bytes (or failure) for Prepare tests."""
+
+    def __init__(
+        self,
+        *,
+        pdf_bytes: bytes | None = b"%PDF-1.4 fake",
+        fail: bool = False,
+    ) -> None:
+        self._pdf_bytes = pdf_bytes
+        self._fail = fail
+        self.render_calls = 0
+
+    def render_pdf(self, tailored_yaml: str) -> bytes:
+        del tailored_yaml
+        self.render_calls += 1
+        if self._fail or self._pdf_bytes is None:
+            raise PdfRenderError("FakePdfRenderer failed")
+        return self._pdf_bytes

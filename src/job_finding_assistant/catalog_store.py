@@ -26,6 +26,11 @@ class CatalogStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
+    @property
+    def db_path(self) -> Path:
+        """Return the SQLite database path."""
+        return self._db_path
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row

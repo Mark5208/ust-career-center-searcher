@@ -8,7 +8,7 @@ from typing import Protocol
 
 import uvicorn
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from job_finding_assistant.assistant import (
@@ -16,12 +16,17 @@ from job_finding_assistant.assistant import (
     Assistant,
     CrawlFilters,
     CrawlOutcome,
+    PreparationPacketView,
+    PrepareBlockedError,
+    PrepareFailedError,
+    PrepareNeedsConfirm,
 )
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.fakes import FakeLlmCvTailor, FakeLlmJudge
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
+from job_finding_assistant.preparation_packet import PreparationPacket
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -37,6 +42,24 @@ class SupportsAssistantUi(Protocol):
 
     def can_prepare(self, job_posting_id: str) -> bool:
         """Return whether Prepare is available for the Job Posting."""
+
+    def prepare(
+        self,
+        job_posting_id: str,
+        *,
+        confirm_hard_constraint_fail: bool = False,
+        confirm_overwrite: bool = False,
+    ) -> PreparationPacket:
+        """Build or overwrite the Preparation Packet."""
+
+    def get_preparation_packet(self, job_posting_id: str) -> PreparationPacketView | None:
+        """Return packet view with current Match Assessment."""
+
+    def get_tailored_yaml(self, job_posting_id: str) -> str | None:
+        """Return Tailored YAML for download."""
+
+    def get_tailored_pdf(self, job_posting_id: str) -> bytes | None:
+        """Return Tailored PDF for download."""
 
     def rejudge_pending_assessments(self) -> None:
         """Opportunistically judge Pending Match Assessments."""
@@ -103,6 +126,7 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
     app = FastAPI(title="Job Finding Assistant")
     app.state.assistant = assistant
     app.state.last_crawl_outcome = None
+    app.state.prepare_error = None
 
     @app.get("/", response_class=HTMLResponse)
     def assessment_summaries_page(
@@ -132,6 +156,105 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
                 "rows": rows,
                 "include_closed": show_closed,
                 "include_passed_deadlines": show_passed,
+                "prepare_error": request.app.state.prepare_error,
+            },
+        )
+
+    @app.post("/jobs/{job_posting_id}/prepare")
+    def prepare_job(
+        request: Request,
+        job_posting_id: str,
+        confirm_hard_constraint_fail: str = Form("0"),
+        confirm_overwrite: str = Form("0"),
+    ) -> Response:
+        current = request.app.state.assistant
+        request.app.state.prepare_error = None
+        try:
+            current.prepare(
+                job_posting_id,
+                confirm_hard_constraint_fail=confirm_hard_constraint_fail == "1",
+                confirm_overwrite=confirm_overwrite == "1",
+            )
+        except PrepareBlockedError as exc:
+            request.app.state.prepare_error = str(exc)
+            return RedirectResponse(url="/", status_code=303)
+        except PrepareNeedsConfirm as exc:
+            confirm_hc = confirm_hard_constraint_fail == "1"
+            confirm_ow = confirm_overwrite == "1"
+            if exc.kind == "hard_constraint_fail":
+                confirm_hc = True
+            if exc.kind == "overwrite":
+                confirm_ow = True
+            return _TEMPLATES.TemplateResponse(
+                request,
+                "prepare_confirm.html",
+                {
+                    "job_posting_id": job_posting_id,
+                    "message": exc.reason,
+                    "confirm_hard_constraint_fail": confirm_hc,
+                    "confirm_overwrite": confirm_ow,
+                },
+                status_code=200,
+            )
+        except PrepareFailedError as exc:
+            request.app.state.prepare_error = str(exc)
+            return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url=f"/jobs/{job_posting_id}/packet", status_code=303)
+
+    @app.get("/jobs/{job_posting_id}/packet", response_class=HTMLResponse)
+    def packet_page(request: Request, job_posting_id: str) -> Response:
+        current = request.app.state.assistant
+        view = current.get_preparation_packet(job_posting_id)
+        if view is None:
+            return RedirectResponse(url="/", status_code=303)
+        posting_title = job_posting_id
+        posting_employer = ""
+        for summary in current.list_assessment_summaries(
+            include_closed=True, include_passed_deadlines=True
+        ):
+            if summary.job_posting_id == job_posting_id:
+                posting_title = summary.title
+                posting_employer = summary.employer
+                break
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "preparation_packet.html",
+            {
+                "job_posting_id": job_posting_id,
+                "title": posting_title,
+                "employer": posting_employer,
+                "packet": view.packet,
+                "match_assessment": view.match_assessment,
+            },
+        )
+
+    @app.get("/jobs/{job_posting_id}/packet/yaml")
+    def download_yaml(job_posting_id: str) -> Response:
+        text = app.state.assistant.get_tailored_yaml(job_posting_id)
+        if text is None:
+            return RedirectResponse(url="/", status_code=303)
+        return Response(
+            content=text,
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="tailored-{job_posting_id}.yaml"'
+                )
+            },
+        )
+
+    @app.get("/jobs/{job_posting_id}/packet/pdf")
+    def download_pdf(job_posting_id: str) -> Response:
+        pdf = app.state.assistant.get_tailored_pdf(job_posting_id)
+        if pdf is None:
+            return RedirectResponse(url="/", status_code=303)
+        return Response(
+            content=pdf,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="tailored-{job_posting_id}.pdf"'
+                )
             },
         )
 
@@ -270,6 +393,7 @@ def build_default_assistant(db_path: Path | None = None) -> Assistant:
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=DiskConstraintFilesStore(data_dir / "constraint_files_state"),
         crawl_pacer=crawl_pacer,
+        packet_store_dir=data_dir / "packets",
     )
 
 

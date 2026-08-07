@@ -6,21 +6,25 @@ Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 
 
 - **UI:** FastAPI + Jinja, single-user local server (`job_finding_assistant.web.app`).
 - **Application seam:** `Assistant` — the only surface the UI and automated tests call.
-- **Persistence:** SQLite via `CatalogStore` (Job Postings, Crawl Filters, Match Assessments, candidate-file fingerprints; later Preparation Packet metadata).
-- **Master CV:** RenderCV YAML on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the YAML file). Python ≥3.12; `rendercv` dependency present (PDF rendering reserved for Prepare).
+- **Persistence:** SQLite via `CatalogStore` (Job Postings, Crawl Filters, Match Assessments, candidate-file fingerprints).
+- **Preparation Packets:** tool-managed filesystem store (`PacketStore`) keyed by Job Posting id (Gap Report, Edit Summary, Tailored YAML, optional PDF); Stale flagged in packet meta on Master CV / HC / Preferences change.
+- **Master CV:** RenderCV YAML on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the YAML file). Python ≥3.12; `rendercv` dependency present.
 - **Hard Constraints / Preferences:** plain-text file paths via `DiskConstraintFilesStore` (tool reads only; empty/missing → unknown without judge).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests.
 - **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
 - **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary); faked in tests.
+- **PDF:** `PdfRenderer` (`RenderCvPdfRenderer` via RenderCV CLI; `FakePdfRenderer` in tests). PDF-only failure leaves packet without PDF.
 
 ```
 Browser → FastAPI/Jinja → Assistant → CatalogStore (SQLite)
+                              ├→ PacketStore (tool-managed files)
                               ├→ JobBoardSession (Playwright live / Fake in tests)
                               ├→ CrawlPacer (Random live / Fake or NoOp in tests)
                               ├→ MasterCvStore (DiskMasterCvStore)
                               ├→ ConstraintFilesStore (DiskConstraintFilesStore)
                               ├→ LlmJudge
-                              └→ LlmCvTailor
+                              ├→ LlmCvTailor
+                              └→ PdfRenderer (RenderCV / Fake)
 ```
 
 ## Database schema (CatalogStore)
@@ -68,14 +72,18 @@ CREATE TABLE IF NOT EXISTS match_assessments (
 `detail_json` stores structured detail fields (including Evidence-rich text) from the detail page.
 `preference` is Strong/Mixed/Weak, or SQL NULL for unknown Preference.
 `candidate_fingerprints` detects Master CV / HC / Preferences content or path-clear changes (ADR-0014).
-`match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending); Crawl new/detail-changed postings clear that posting’s assessment. Re-judge is opportunistic via `rejudge_pending_assessments()` (catalog UI calls it on load).
-Preparation Packet tables arrive in a later slice (`has_preparation_packet` / Stale remain false for now).
+`match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending) and all Preparation Packets are marked Stale; Crawl new/detail-changed postings clear that posting’s assessment only (packets are not Staled by Crawl). Re-judge is opportunistic via `rejudge_pending_assessments()` (catalog UI calls it on load).
+
+Preparation Packet artifacts live under the tool-managed `PacketStore` directory (not SQLite): per Job Posting `gap_report.json`, `edit_summary.json`, `tailored.yaml`, optional `tailored.pdf`, and `meta.json` (`stale`).
 
 ## Package layout
 
 ```
 src/job_finding_assistant/
-  assistant.py              # Assistant + AssessmentSummary + CrawlOutcome
+  assistant.py              # Assistant + AssessmentSummary + Prepare + CrawlOutcome
+  preparation_packet.py     # GapReport, EditSummary, TailorResult, PreparationPacket
+  packet_store.py           # Tool-managed PacketStore (filesystem)
+  pdf_renderer.py           # RenderCvPdfRenderer + PdfRenderError
   crawl_filters.py          # CrawlFilters (+ Closing-capable check)
   crawl_pacer.py            # RandomCrawlPacer / NoOpCrawlPacer delay ranges
   constraint_files.py       # Read-only HC/Preferences file + fingerprint helpers
@@ -90,13 +98,16 @@ src/job_finding_assistant/
   fakes.py                  # Test / local-shell fakes
   web/
     app.py                  # create_app(assistant), main()
-    templates/              # Jinja pages (catalog + candidate + crawl)
+    templates/              # catalog + candidate + crawl + packet + prepare confirm
 tests/                      # Behavior through Assistant (+ UI→Assistant)
 ```
 
-## Candidate / Crawl / Assessment UI
+## Candidate / Crawl / Assessment / Prepare UI
 
-- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare gate; opportunistic rejudge on load)
+- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare / Re-Prepare; packet presence/Stale; opportunistic rejudge on load)
+- `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
+- `/jobs/{id}/packet` — Gap Report → Edit Summary → Tailored downloads + current Match Assessment
+- `/jobs/{id}/packet/yaml` / `/jobs/{id}/packet/pdf` — downloads
 - `/candidate` — set Master CV / Hard Constraints / Preferences paths; inspect Candidate Snapshot; path/read errors
 - `/crawl` — User-Attended Login, Crawl Filters, Incremental Crawl / Full Refresh
 - POST `/candidate/master-cv`, `/candidate/hard-constraints`, `/candidate/preferences` (+ clear) — mutate only via Assistant
@@ -115,10 +126,8 @@ Live Crawls intentionally wait randomly between Job Board list pages and detail 
 
 ## Decided next (docs ahead of code)
 
-Not implemented yet. Product intent in `CONTEXT.md` and ADRs 0009, 0011–0013:
+Not implemented yet. Product intent in `CONTEXT.md` and ADRs:
 
-- Tailored CV YAML → RenderCV PDF at Prepare; Tailored CV formatting rules (reorder-first, pinned section order, omission/rephrase limits) are documented in ADR-0009; still unimplemented in `LlmCvTailor`.
-- Gap Report rules (Prepare-time, missing/partial, non-fictional suggestions, tailor must not fill Missing) are documented in ADR-0011; still unimplemented (no `prepare()` yet).
-- Edit Summary rules (grouped disclosures, Gap Report boundary, best-effort checklist from the tailor) are documented in ADR-0012; still unimplemented (no `prepare()` yet).
-- Prepare flow (gates, confirms, packet contents, tool-managed store, downloads, Delete cascade, Stale, atomic failure) is documented in ADR-0013; still unimplemented (no `prepare()` yet). Stale marking on candidate-file change is reserved for when packets exist.
-- Live `LlmJudge` provider (not Fake) implementing ADR-0008 / ADR-0010 rubrics end-to-end.
+- Delete Job Posting (+ assessment + packet) with confirm (ADR-0013 remainder; issue #14).
+- Live `LlmJudge` / `LlmCvTailor` providers (not Fake) implementing ADR-0008 / 0009 / 0010 / 0011 / 0012 rubrics end-to-end.
+- Production PDF uses `RenderCvPdfRenderer` (RenderCV CLI); local shell falls back to missing-PDF signal when the CLI is unavailable. Tests use `FakePdfRenderer`.
