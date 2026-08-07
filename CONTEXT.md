@@ -1,6 +1,6 @@
 # Job Finding Assistant
 
-Personal local tool that crawls the HKUST Job Board, assesses fit against one user's Master CV and Preferences, and prepares a Tailored CV for selected Job Postings.
+Personal local tool that crawls the HKUST Job Board, assesses fit against one user's Master CV, Hard Constraints, and Preferences, and prepares a Tailored CV for selected Job Postings.
 
 ## Language
 
@@ -43,51 +43,55 @@ An optional Crawl Filter cutoff date; after list discovery, the Crawl skips deta
 _Avoid_: filter, max age, crawl window
 
 **Delete**:
-The user removes a Job Posting and its related artifacts from the local catalog.
+The user permanently removes a Job Posting, its Match Assessment, and its Preparation Packet (if any) from the local catalog and tool-managed store, after a confirm that names those artifacts. No trash or undo. Rules: ADR-0013.
 _Avoid_: archive, hide, soft-delete
 
 ### Candidate
 
 **Master CV**:
-The user's sole authored experience-and-skills document (LaTeX); never overwritten by the tool.
-_Avoid_: resume, profile, base CV
+The user's sole authored experience-and-skills document as RenderCV YAML on disk; never overwritten by the tool. Typography and PDF output are delegated to RenderCV; the user focuses on content. Unreadable or invalid YAML yields no usable Candidate Snapshot (Relevance stays Pending) with a clear error — rules: ADR-0014.
+_Avoid_: resume, profile, base CV, LaTeX Master CV
 
-**Preferences**:
-A sidecar for Hard Constraint inputs only — not Crawl Filters: languages spoken (optional level), acceptable work locations, and Gap Tolerance. Empty fields leave the related Hard Constraint unknown, never fail.
-_Avoid_: profile, settings, user config, visa, GPA, Crawl Filters
+**Hard Constraints file**:
+A user-authored plain-text file of non-negotiable terms (path set like the Master CV; tool reads only). Empty or missing means no Hard Constraints to check. Path set but unreadable yields unknown for that signal plus a path/read error (not Pending) — rules: ADR-0014.
+_Avoid_: preferences file (for this), must-haves config, deal-breaker form
 
-**Gap Tolerance**:
-How much study interruption the user will accept for a job’s employment period: None, Semester, Year, or Any. Unset leaves the Gap Tolerance Hard Constraint unknown.
-_Avoid_: gap year flag, internship length preference (alone)
+**Preferences file**:
+A user-authored plain-text file of soft priorities — what the user likes to have but does not require (path set like the Master CV; tool reads only). Empty or missing means no soft priorities to score. Path set but unreadable yields unknown for that signal plus a path/read error (not Pending). Not Crawl Filters and not Hard Constraints — rules: ADR-0014.
+_Avoid_: settings, user config, hard constraints file, relevance input (alone)
 
 **Candidate Snapshot**:
-A structured view derived from the Master CV for matching: contact if present, education, experience, projects, and skills/tools as written — no inferred skills, and no Preferences. Rebuilt when the Master CV changes; inspectable; not hand-edited (fix the Master CV instead).
+A structured view derived from the Master CV for matching: contact if present, education, experience, projects, and skills/tools as written — no inferred skills, and no Hard Constraints or Preferences. Rebuilt when the Master CV changes; inspectable; not hand-edited (fix the Master CV instead). Absent when the Master CV is unreadable or invalid.
 _Avoid_: profile, parsed CV (as a product concept), editable profile
 
 ### Assessment
 
 **Hard Constraint**:
-A pass, fail, or unknown check using Preferences against the Job Posting for language, work location, or Gap Tolerance. Location passes if the posting’s work location is among acceptable locations, or is clearly remote and remote is accepted; fails on a definite mismatch; unknown if Preferences locations are empty or the posting location is missing/unclear. Language passes if every language the posting requires appears in Preferences; fails if a required language is missing; unknown if Preferences languages are empty or needs are unclear — “preferred” or vague language wording is not a hard require. Gap Tolerance fails when the posting’s employment period requires more study interruption than the user accepts; passes when within tolerance; unknown if Gap Tolerance is unset or the posting’s period impact is unclear. Unknown never counts as fail. Overall outcome for a posting: fail if any Hard Constraint fails; else pass if all that apply pass; else unknown.
-_Avoid_: requirement, filter, must-have (when meaning this check)
+A pass, fail, or unknown deal-breaker signal for the Job Posting against the Hard Constraints file. Evaluated by the LLM judge when that file is non-empty; empty or missing file yields unknown without a judge call. Unknown never counts as fail. Fail never blocks Prepare; Prepare confirms with the short fail reason. Overall outcome for a posting is this single Hard Constraint judgment (with a short reason). Judge criteria: ADR-0010. Prepare rules: ADR-0013.
+_Avoid_: preference, soft want, ATS score, requirement filter (when meaning this check), Override, gate
+
+**Preference**:
+An ordinal soft-fit band — Strong, Mixed, or Weak — for how well a Job Posting aligns with the Preferences file (desire, not capability). Evaluated by the LLM judge when that file is non-empty; empty or missing file yields unknown without a judge call. Unknown Preference does not affect Assessment Summary sort. Weak does not block Prepare. Band criteria and judge inputs: ADR-0008.
+_Avoid_: Relevance, Preference Score, ATS score, Hard Constraint, numeric preference percentage
+
+**Relevance**:
+An ordinal capability-fit band — Strong, Mixed, or Weak — for how well the Master CV / Candidate Snapshot matches the Job Posting description. Not an ATS score and not Preference. Band criteria and judge inputs: ADR-0008.
+_Avoid_: match score, percentage, ranking score, ATS score, Preference
 
 **Assessment Summary**:
-The browse/list view of fit for one Job Posting: title, employer, Listing status, Deadline status, overall Hard Constraint outcome, Relevance band, and whether a Preparation Packet exists (and if Stale). Default catalog shows Open postings with Deadline Upcoming or Unknown; sorts by Relevance (Strong, then Mixed, then Weak) then sooner deadline; overall Hard Constraint fail sorts after pass and unknown; Closed and Deadline Passed are hidden by default but toggleable.
+The browse/list view of fit for one Job Posting: title, employer, Listing status, Deadline status, Hard Constraint outcome, Preference band, Relevance band, and whether a Preparation Packet exists (and if Stale). Default catalog shows Open postings with Deadline Upcoming or Unknown; sorts Pending last, then Hard Constraint fail after pass and unknown, then Preference (Strong, then Mixed, then Weak; unknown Preference ties), then Relevance (Strong, then Mixed, then Weak), then sooner deadline (known Upcoming sooner-first; Deadline Unknown last among otherwise-tied rows); Closed and Deadline Passed are hidden by default but toggleable.
 _Avoid_: job card, list row, dashboard row
 
 **Pending**:
-Assessment Summary state when no Match Assessment exists yet — no Relevance or Evidence; Prepare is unavailable; Pending rows sort after assessed ones.
+Assessment Summary state when a required judgment is missing: Hard Constraint when the Hard Constraints file is non-empty and readable, Preference when the Preferences file is non-empty and readable, or Relevance (needs a usable Master CV / Candidate Snapshot and judge). Also Pending when the judge fails or is unavailable for a required signal, or when the Master CV is unreadable or invalid. Empty Hard Constraints or Preferences files count as resolved unknown, not Pending; a set but unreadable Hard Constraints or Preferences path is unknown for that signal (with a path/read error), not Pending. Prepare is unavailable while Pending; Pending rows sort after assessed ones. Freshness rules: ADR-0014.
 _Avoid_: loading, unassessed, not ready (alone)
 
 **Match Assessment**:
-The full fit judgment for one Job Posting shown in detail: Hard Constraints with short reasons, Relevance, and Evidence pairs, with actions to Prepare, Override, or Delete. Rebuilt for postings that are new or whose detail changed in a Crawl; rebuilt for Open postings when the Master CV or Preferences change; otherwise the last Assessment is kept.
-_Avoid_: score, analysis, match result
-
-**Relevance**:
-Coarse fit band for soft factors: Strong, Mixed, or Weak — not a numeric score.
-_Avoid_: match score, percentage, ranking score
+The full fit judgment for one Job Posting shown in detail: Hard Constraint with short reason, Preference, Relevance, and Evidence pairs, with actions to Prepare or Delete. On Master CV, Hard Constraints file, or Preferences file change (content or path clear), all assessments go Pending and re-judge asynchronously; new or detail-changed Crawl postings start Pending then re-judge asynchronously (Crawl success does not mean assessments finished). Judge failure leaves Pending or keeps the prior complete assessment — never a half-assessed final row. Otherwise the last Assessment is kept. Rules: ADR-0014.
+_Avoid_: score, analysis, match result, ATS score
 
 **Evidence pair**:
-One justification unit: a Job Posting excerpt, a Master CV or Candidate Snapshot excerpt (or “not found”), and a one-line role — supports Relevance, weakens it, or explains a Hard Constraint.
+One justification unit: a Job Posting excerpt, a Master CV or Candidate Snapshot excerpt (or “not found”), and a one-line role — supports or weakens Relevance, or explains a Hard Constraint or Preference judgment.
 _Avoid_: quote pair, citation row
 
 **Evidence**:
@@ -95,27 +99,23 @@ The short list of Evidence pairs in a Match Assessment (about three to seven) us
 _Avoid_: quote, reference, highlight (alone)
 
 **Gap Report**:
-Per Job Posting, a list of gaps: each item is a Requirement from the posting, a status (missing or partial), Evidence from the Master CV (or “not found”), and a non-fictional Suggestion. Hard Constraint failures appear when relevant (especially under Override). Never invents experience.
+Per Job Posting, a list of gaps: each item is a Requirement from the posting, a status (missing or partial), Evidence from the Master CV (or “not found”), and a non-fictional Suggestion. Hard Constraint failures appear when the Hard Constraint failed. Never invents experience. Built at Prepare only. Rules: ADR-0011.
 _Avoid_: suggestions list, missing requirements (alone)
 
 ### CV artifacts
 
 **Preparation Packet**:
-The prepare-to-apply output for one Job Posting: Match Assessment, Gap Report, Tailored CV, and Edit Summary. One current packet per posting; re-running prepare overwrites it after a warning.
-_Avoid_: application pack, draft bundle, apply kit
+The prepare-to-apply output for one Job Posting, held in a tool-managed store (not a user-chosen packets folder): Gap Report, Edit Summary, Tailored CV (RenderCV YAML), and PDF from RenderCV at Prepare; viewed with the current Match Assessment (not a frozen copy). UI for Gap Report and Edit Summary; download Tailored PDF and YAML. One current packet per posting; re-Prepare overwrites after confirm; mid-run failure leaves the prior packet untouched. Rules: ADR-0013.
+_Avoid_: application pack, draft bundle, apply kit, packets folder
 
 **Tailored CV**:
-A per-Job-Posting LaTeX copy of the Master CV that may reorder, rephrase, emphasize, or omit real content, and may rewrite an existing summary section only. Never invents employers, dates, titles, or skills; preserves the Master CV’s LaTeX structure.
-_Avoid_: modified CV, generated resume, customized CV (when meaning this artifact)
+A per-Job-Posting RenderCV YAML copy of the Master CV that may reorder, rephrase, emphasize, or omit real content, and may rewrite an existing summary section only. Never invents employers, dates, titles, or skills; preserves the Master CV’s RenderCV YAML structure. Honors optional Master CV `assistant.pinned_section_order` metadata. Rendered to PDF via RenderCV for the user; the Master CV file is never overwritten. Formatting criteria: ADR-0009.
+_Avoid_: modified CV, generated resume, customized CV (when meaning this artifact), LaTeX tailored CV
 
 **Edit Summary**:
-A human-readable list of what the Tailored CV changed versus the Master CV (reorders, omissions, rephrases, summary tweaks) so the user can audit before applying.
-_Avoid_: diff log, changelog, patch notes
+A first-class Preparation Packet peer: a grouped human-readable audit of Master CV → Tailored CV edits (omissions, section and cross-role reorders, summary rewrites, pin notes, material rephrases) — never JD gaps (those stay in the Gap Report). Empty material change is “No material edits.” Rules: ADR-0012.
+_Avoid_: diff log, changelog, patch notes, Gap Report
 
 **Stale**:
-A Preparation Packet that is outdated because the Master CV or Preferences changed after it was produced. Stale packets are not auto-regenerated; the user re-prepares deliberately.
+A Preparation Packet that is outdated because the Master CV, Hard Constraints file, or Preferences file changed (content or path clear) after it was produced — not because Crawl updated Job Posting detail. Stale packets stay fully readable with a banner; they are not auto-regenerated; the user re-prepares deliberately. Change detection: ADR-0014. Prepare/Stale rules: ADR-0013.
 _Avoid_: outdated draft, invalid, expired packet
-
-**Override**:
-An explicit user choice to produce a Preparation Packet despite a Hard Constraint failure.
-_Avoid_: force, bypass, ignore constraints

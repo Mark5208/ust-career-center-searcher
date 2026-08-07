@@ -1,5 +1,7 @@
 # Architecture — Job Finding Assistant
 
+Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014. This file describes the **current running code**; decided-but-unimplemented shape is under [Decided next (docs ahead of code)](#decided-next-docs-ahead-of-code).
+
 ## Runtime shape
 
 - **UI:** FastAPI + Jinja, single-user local server (`job_finding_assistant.web.app`).
@@ -107,3 +109,19 @@ pytest
 ```
 
 Live Crawls intentionally wait randomly between Job Board list pages and detail fetches to reduce bursty request patterns.
+
+## Decided next (docs ahead of code)
+
+Not implemented yet. Product intent in `CONTEXT.md` and ADRs 0005–0014:
+
+- Replace structured `preferences` + `hard_constraints` rules with two read-only disk paths (Hard Constraints file, Preferences file) and LLM Hard Constraint / Preference / Relevance judgments.
+- Assessment Summary shows Preference and Relevance; sort Preference then Relevance (Deadline Unknown last among deadline ties); Pending/Prepare rules per ADR-0006 / ADR-0013 (HC is a non-blocking signal; Override removed).
+- Preference and Relevance judge rubrics (input isolation, band criteria, Evidence/reason outputs) are documented in ADR-0008; still unimplemented in `LlmJudge`.
+- Hard Constraint judge rubric (isolation, fail/unknown/pass precedence, conservative inference) is documented in ADR-0010; still unimplemented in `LlmJudge` (code still uses rule-based `hard_constraints`).
+- `match_assessments` gains a Preference band (and HC becomes freeform-reason oriented rather than three named rule results).
+- Master CV becomes RenderCV YAML (Python ≥3.12); Candidate Snapshot from YAML; Tailored CV YAML → RenderCV PDF at prepare; no LaTeX Master CV in v1.
+- Tailored CV formatting rules (reorder-first, pinned section order, omission/rephrase limits) are documented in ADR-0009; still unimplemented in `LlmCvTailor`.
+- Gap Report rules (Prepare-time, missing/partial, non-fictional suggestions, tailor must not fill Missing) are documented in ADR-0011; still unimplemented (no `prepare()` yet).
+- Edit Summary rules (grouped disclosures, Gap Report boundary, best-effort checklist from the tailor) are documented in ADR-0012; still unimplemented (no `prepare()` yet).
+- Prepare flow (gates, confirms, packet contents, tool-managed store, downloads, Delete cascade, Stale, atomic failure) is documented in ADR-0013; still unimplemented (no `prepare()` yet).
+- Assessment freshness (ADR-0014): content fingerprint (not path-only); on Master CV / HC / Preferences change mark **all** assessments Pending and packets Stale, then async re-judge; Crawl new/detail-changed → Pending (Crawl success ≠ assessments done); Crawl does not Stale packets; unreadable-file and judge-failure Pending rules — still unimplemented.
