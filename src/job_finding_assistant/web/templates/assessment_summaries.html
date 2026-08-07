@@ -150,13 +150,27 @@
             {% else %}
             · Prepare unavailable
             {% endif %}
+            ·
+            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
+              <button type="submit">Delete</button>
+            </form>
           </p>
           {% elif not row.can_prepare %}
-          <p class="prepare">Prepare unavailable</p>
+          <p class="prepare">
+            Prepare unavailable
+            ·
+            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
+              <button type="submit">Delete</button>
+            </form>
+          </p>
           {% else %}
           <p class="prepare">
             <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/prepare" style="display:inline">
               <button type="submit">Prepare</button>
+            </form>
+            ·
+            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
+              <button type="submit">Delete</button>
             </form>
           </p>
           {% endif %}

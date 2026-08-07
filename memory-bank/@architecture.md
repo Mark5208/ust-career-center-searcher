@@ -104,8 +104,9 @@ tests/                      # Behavior through Assistant (+ UI→Assistant)
 
 ## Candidate / Crawl / Assessment / Prepare UI
 
-- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare / Re-Prepare; packet presence/Stale; opportunistic rejudge on load)
+- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare / Re-Prepare; Delete; packet presence/Stale; opportunistic rejudge on load)
 - `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
+- `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)
 - `/jobs/{id}/packet` — Gap Report → Edit Summary → Tailored downloads + current Match Assessment
 - `/jobs/{id}/packet/yaml` / `/jobs/{id}/packet/pdf` — downloads
 - `/candidate` — set Master CV / Hard Constraints / Preferences paths; inspect Candidate Snapshot; path/read errors
@@ -128,6 +129,5 @@ Live Crawls intentionally wait randomly between Job Board list pages and detail 
 
 Not implemented yet. Product intent in `CONTEXT.md` and ADRs:
 
-- Delete Job Posting (+ assessment + packet) with confirm (ADR-0013 remainder; issue #14).
 - Live `LlmJudge` / `LlmCvTailor` providers (not Fake) implementing ADR-0008 / 0009 / 0010 / 0011 / 0012 rubrics end-to-end.
 - Production PDF uses `RenderCvPdfRenderer` (RenderCV CLI); local shell falls back to missing-PDF signal when the CLI is unavailable. Tests use `FakePdfRenderer`.

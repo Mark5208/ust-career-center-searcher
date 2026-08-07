@@ -126,6 +126,12 @@ class PacketStore:
             if child.is_dir() and not child.name.startswith("."):
                 self.mark_stale(child.name)
 
+    def delete(self, job_posting_id: str) -> None:
+        """Hard-remove the packet directory for one Job Posting, if present."""
+        packet_dir = self._packet_dir(job_posting_id)
+        if packet_dir.exists():
+            shutil.rmtree(packet_dir)
+
 
 def _gap_report_to_json(report: GapReport) -> str:
     return json.dumps(
