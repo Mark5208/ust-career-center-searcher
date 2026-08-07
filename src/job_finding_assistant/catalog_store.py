@@ -1,4 +1,4 @@
-"""SQLite persistence for Job Postings, Preferences, and Match Assessments."""
+"""SQLite persistence for Job Postings, fingerprints, and Match Assessments."""
 
 from __future__ import annotations
 
@@ -9,14 +9,13 @@ from pathlib import Path
 from typing import cast
 
 from job_finding_assistant.crawl_filters import CrawlFilters
-from job_finding_assistant.hard_constraints import ConstraintOutcome, ConstraintResult
 from job_finding_assistant.match_assessment import (
+    ConstraintOutcome,
     EvidencePair,
     MatchAssessment,
-    NamedConstraintResult,
+    PreferenceBand,
     RelevanceBand,
 )
-from job_finding_assistant.preferences import GapTolerance, LanguagePreference, Preferences
 
 
 class CatalogStore:
@@ -52,16 +51,6 @@ class CatalogStore:
             self._ensure_job_posting_columns(connection)
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS preferences (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    languages_json TEXT NOT NULL,
-                    locations_json TEXT NOT NULL,
-                    gap_tolerance TEXT
-                )
-                """
-            )
-            connection.execute(
-                """
                 CREATE TABLE IF NOT EXISTS crawl_filters (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     filters_json TEXT NOT NULL
@@ -70,15 +59,53 @@ class CatalogStore:
             )
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS candidate_fingerprints (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    master_cv_fingerprint TEXT,
+                    hard_constraints_fingerprint TEXT,
+                    preferences_fingerprint TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS match_assessments (
                     job_posting_id TEXT PRIMARY KEY,
                     hard_constraint_outcome TEXT NOT NULL,
-                    hard_constraints_json TEXT NOT NULL,
+                    hard_constraint_reason TEXT NOT NULL,
+                    preference TEXT,
+                    preference_reason TEXT NOT NULL,
                     relevance TEXT NOT NULL,
                     evidence_json TEXT NOT NULL
                 )
                 """
             )
+            self._migrate_match_assessments(connection)
+
+    def _migrate_match_assessments(self, connection: sqlite3.Connection) -> None:
+        """Upgrade legacy named-constraint schema to freeform three-signal rows."""
+        existing = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(match_assessments)").fetchall()
+        }
+        if not existing:
+            return
+        if "preference" in existing and "hard_constraint_reason" in existing:
+            return
+        connection.execute("DROP TABLE IF EXISTS match_assessments")
+        connection.execute(
+            """
+            CREATE TABLE match_assessments (
+                job_posting_id TEXT PRIMARY KEY,
+                hard_constraint_outcome TEXT NOT NULL,
+                hard_constraint_reason TEXT NOT NULL,
+                preference TEXT,
+                preference_reason TEXT NOT NULL,
+                relevance TEXT NOT NULL,
+                evidence_json TEXT NOT NULL
+            )
+            """
+        )
 
     def _ensure_job_posting_columns(self, connection: sqlite3.Connection) -> None:
         existing = {
@@ -109,6 +136,7 @@ class CatalogStore:
                     p.deadline_status,
                     p.application_deadline,
                     a.hard_constraint_outcome,
+                    a.preference,
                     a.relevance
                 FROM job_postings AS p
                 LEFT JOIN match_assessments AS a ON a.job_posting_id = p.id
@@ -117,30 +145,48 @@ class CatalogStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_open_job_posting_ids(self) -> list[str]:
-        """Return ids of Open Job Postings (for assessment rebuild)."""
+    def list_all_job_posting_ids(self) -> list[str]:
+        """Return ids of all Job Postings (Open and Closed)."""
         with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT id FROM job_postings
-                WHERE listing_status = 'Open'
                 ORDER BY id
                 """
             ).fetchall()
         return [row["id"] for row in rows]
 
+    def list_pending_job_posting_ids(self) -> list[str]:
+        """Return Job Posting ids that have detail but no Match Assessment yet."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT p.id
+                FROM job_postings AS p
+                LEFT JOIN match_assessments AS a ON a.job_posting_id = p.id
+                WHERE p.detail_json IS NOT NULL
+                  AND p.detail_json != ''
+                  AND a.job_posting_id IS NULL
+                ORDER BY p.id
+                """
+            ).fetchall()
+        return [row["id"] for row in rows]
+
+    def clear_all_match_assessments(self) -> None:
+        """Mark every Match Assessment Pending by deleting stored rows."""
+        with self._connect() as connection:
+            connection.execute("DELETE FROM match_assessments")
+
+    def clear_match_assessment(self, job_posting_id: str) -> None:
+        """Mark one Match Assessment Pending by deleting its stored row."""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM match_assessments WHERE job_posting_id = ?",
+                (job_posting_id,),
+            )
+
     def save_match_assessment(self, assessment: MatchAssessment) -> None:
         """Insert or replace the Match Assessment for one Job Posting."""
-        hard_constraints_json = json.dumps(
-            [
-                {
-                    "name": item.name,
-                    "outcome": item.result.outcome,
-                    "reason": item.result.reason,
-                }
-                for item in assessment.hard_constraints
-            ]
-        )
         evidence_json = json.dumps(
             [
                 {
@@ -157,21 +203,27 @@ class CatalogStore:
                 INSERT INTO match_assessments (
                     job_posting_id,
                     hard_constraint_outcome,
-                    hard_constraints_json,
+                    hard_constraint_reason,
+                    preference,
+                    preference_reason,
                     relevance,
                     evidence_json
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_posting_id) DO UPDATE SET
                     hard_constraint_outcome = excluded.hard_constraint_outcome,
-                    hard_constraints_json = excluded.hard_constraints_json,
+                    hard_constraint_reason = excluded.hard_constraint_reason,
+                    preference = excluded.preference,
+                    preference_reason = excluded.preference_reason,
                     relevance = excluded.relevance,
                     evidence_json = excluded.evidence_json
                 """,
                 (
                     assessment.job_posting_id,
                     assessment.hard_constraint_outcome,
-                    hard_constraints_json,
+                    assessment.hard_constraint_reason,
+                    assessment.preference,
+                    assessment.preference_reason,
                     assessment.relevance,
                     evidence_json,
                 ),
@@ -185,7 +237,9 @@ class CatalogStore:
                 SELECT
                     job_posting_id,
                     hard_constraint_outcome,
-                    hard_constraints_json,
+                    hard_constraint_reason,
+                    preference,
+                    preference_reason,
                     relevance,
                     evidence_json
                 FROM match_assessments
@@ -195,23 +249,16 @@ class CatalogStore:
             ).fetchone()
         if row is None:
             return None
-        constraints_raw = json.loads(row["hard_constraints_json"])
         evidence_raw = json.loads(row["evidence_json"])
+        preference_raw = row["preference"]
         return MatchAssessment(
             job_posting_id=row["job_posting_id"],
             hard_constraint_outcome=cast(
                 ConstraintOutcome, row["hard_constraint_outcome"]
             ),
-            hard_constraints=[
-                NamedConstraintResult(
-                    name=item["name"],
-                    result=ConstraintResult(
-                        outcome=cast(ConstraintOutcome, item["outcome"]),
-                        reason=item["reason"],
-                    ),
-                )
-                for item in constraints_raw
-            ],
+            hard_constraint_reason=row["hard_constraint_reason"],
+            preference=cast(PreferenceBand, preference_raw) if preference_raw else None,
+            preference_reason=row["preference_reason"],
             relevance=cast(RelevanceBand, row["relevance"]),
             evidence=[
                 EvidencePair(
@@ -223,56 +270,55 @@ class CatalogStore:
             ],
         )
 
-    def get_preferences(self) -> Preferences:
-        """Return Preferences; missing row means all fields empty/unset."""
+    def get_candidate_fingerprints(self) -> dict[str, str | None]:
+        """Return last-seen Master CV / HC / Preferences content fingerprints."""
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT languages_json, locations_json, gap_tolerance
-                FROM preferences
+                SELECT
+                    master_cv_fingerprint,
+                    hard_constraints_fingerprint,
+                    preferences_fingerprint
+                FROM candidate_fingerprints
                 WHERE id = 1
                 """
             ).fetchone()
         if row is None:
-            return Preferences(languages=[], locations=[], gap_tolerance=None)
-        languages_raw = json.loads(row["languages_json"])
-        locations_raw = json.loads(row["locations_json"])
-        gap_raw = row["gap_tolerance"]
-        return Preferences(
-            languages=[
-                LanguagePreference(
-                    language=item["language"],
-                    level=item.get("level"),
-                )
-                for item in languages_raw
-            ],
-            locations=list(locations_raw),
-            gap_tolerance=GapTolerance(gap_raw) if gap_raw is not None else None,
-        )
+            return {
+                "master_cv_fingerprint": None,
+                "hard_constraints_fingerprint": None,
+                "preferences_fingerprint": None,
+            }
+        return dict(row)
 
-    def save_preferences(self, preferences: Preferences) -> None:
-        """Persist Preferences as a singleton row (no Crawl Filters)."""
-        languages_json = json.dumps(
-            [
-                {"language": item.language, "level": item.level}
-                for item in preferences.languages
-            ]
-        )
-        locations_json = json.dumps(list(preferences.locations))
-        gap_tolerance = (
-            preferences.gap_tolerance.value if preferences.gap_tolerance is not None else None
-        )
+    def save_candidate_fingerprints(
+        self,
+        *,
+        master_cv_fingerprint: str | None,
+        hard_constraints_fingerprint: str | None,
+        preferences_fingerprint: str | None,
+    ) -> None:
+        """Persist last-seen candidate-file fingerprints."""
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO preferences (id, languages_json, locations_json, gap_tolerance)
+                INSERT INTO candidate_fingerprints (
+                    id,
+                    master_cv_fingerprint,
+                    hard_constraints_fingerprint,
+                    preferences_fingerprint
+                )
                 VALUES (1, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    languages_json = excluded.languages_json,
-                    locations_json = excluded.locations_json,
-                    gap_tolerance = excluded.gap_tolerance
+                    master_cv_fingerprint = excluded.master_cv_fingerprint,
+                    hard_constraints_fingerprint = excluded.hard_constraints_fingerprint,
+                    preferences_fingerprint = excluded.preferences_fingerprint
                 """,
-                (languages_json, locations_json, gap_tolerance),
+                (
+                    master_cv_fingerprint,
+                    hard_constraints_fingerprint,
+                    preferences_fingerprint,
+                ),
             )
 
     def get_job_posting(self, job_posting_id: str) -> dict[str, str | None] | None:

@@ -9,13 +9,12 @@ from job_finding_assistant.assistant import (
     Assistant,
     CrawlFilters,
     CrawlOutcome,
-    GapTolerance,
-    LanguagePreference,
-    Preferences,
 )
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
+from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.fakes import (
+    FakeConstraintFilesStore,
     FakeJobBoardSession,
     FakeLlmCvTailor,
     FakeLlmJudge,
@@ -33,12 +32,18 @@ class _RecordingAssistant:
         self.list_kwargs: dict[str, bool] = {}
         self.summaries: list[AssessmentSummary] = []
         self.can_prepare_calls: list[str] = []
+        self.rejudge_calls = 0
         self.master_cv_path: str | None = None
         self.snapshot: CandidateSnapshot | None = None
-        self.preferences = Preferences(languages=[], locations=[], gap_tolerance=None)
+        self.hard_constraints_path: str | None = None
+        self.preferences_path: str | None = None
+        self.candidate_file_errors: list[str] = []
         self.crawl_filters = CrawlFilters()
         self.set_master_cv_calls: list[str] = []
-        self.update_preferences_calls: list[Preferences] = []
+        self.set_hard_constraints_calls: list[str] = []
+        self.set_preferences_calls: list[str] = []
+        self.clear_hard_constraints_calls = 0
+        self.clear_preferences_calls = 0
         self.login_calls = 0
         self.crawl_calls: list[bool] = []
         self._can_start_crawl = False
@@ -61,8 +66,11 @@ class _RecordingAssistant:
         for row in self.summaries:
             if row.job_posting_id != job_posting_id:
                 continue
-            return not (row.pending or row.hard_constraint_outcome == "fail")
+            return not row.pending
         return False
+
+    def rejudge_pending_assessments(self) -> None:
+        self.rejudge_calls += 1
 
     def get_master_cv_path(self) -> str | None:
         return self.master_cv_path
@@ -74,12 +82,30 @@ class _RecordingAssistant:
     def get_candidate_snapshot(self) -> CandidateSnapshot | None:
         return self.snapshot
 
-    def get_preferences(self) -> Preferences:
-        return self.preferences
+    def get_hard_constraints_path(self) -> str | None:
+        return self.hard_constraints_path
 
-    def update_preferences(self, preferences: Preferences) -> None:
-        self.update_preferences_calls.append(preferences)
-        self.preferences = preferences
+    def set_hard_constraints_path(self, path: str) -> None:
+        self.set_hard_constraints_calls.append(path)
+        self.hard_constraints_path = path
+
+    def clear_hard_constraints_path(self) -> None:
+        self.clear_hard_constraints_calls += 1
+        self.hard_constraints_path = None
+
+    def get_preferences_path(self) -> str | None:
+        return self.preferences_path
+
+    def set_preferences_path(self, path: str) -> None:
+        self.set_preferences_calls.append(path)
+        self.preferences_path = path
+
+    def clear_preferences_path(self) -> None:
+        self.clear_preferences_calls += 1
+        self.preferences_path = None
+
+    def get_candidate_file_errors(self) -> list[str]:
+        return list(self.candidate_file_errors)
 
     def get_crawl_filters(self) -> CrawlFilters:
         return self.crawl_filters
@@ -107,6 +133,7 @@ def test_catalog_page_calls_assistant_and_shows_empty_job_postings_state() -> No
 
     assert response.status_code == 200
     assert assistant.list_calls == 1
+    assert assistant.rejudge_calls == 1
     assert assistant.list_kwargs == {
         "include_closed": False,
         "include_passed_deadlines": False,
@@ -134,6 +161,7 @@ def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pendi
             deadline_status="Upcoming",
             pending=False,
             hard_constraint_outcome="pass",
+            preference="Strong",
             relevance="Strong",
         ),
     ]
@@ -148,6 +176,7 @@ def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pendi
     assert "Prepare unavailable" in response.text
     assert "Strong" in response.text
     assert "pass" in response.text
+    assert "Preference" in response.text
     assert assistant.can_prepare_calls == ["86534", "86535"]
 
 
@@ -173,6 +202,7 @@ def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -
         master_cv=FakeMasterCvStore(),
         llm_judge=FakeLlmJudge(),
         llm_cv_tailor=FakeLlmCvTailor(),
+        constraint_files=FakeConstraintFilesStore(),
     )
     client = TestClient(create_app(assistant))
 
@@ -182,20 +212,17 @@ def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -
     assert "No Job Postings" in response.text
 
 
-def test_candidate_page_calls_assistant_for_snapshot_and_preferences() -> None:
+def test_candidate_page_calls_assistant_for_snapshot_and_constraint_paths() -> None:
     assistant = _RecordingAssistant()
     assistant.master_cv_path = "/tmp/master.tex"
+    assistant.hard_constraints_path = "/tmp/hard.txt"
+    assistant.preferences_path = "/tmp/prefs.txt"
     assistant.snapshot = CandidateSnapshot(
         contact="Alice Example, alice@example.com",
         education=["BEng Computer Science, HKUST, 2024"],
         experience=["Software Intern at Acme Corp"],
         projects=["Campus Event Finder"],
         skills_tools=["Python, LaTeX, SQLite"],
-    )
-    assistant.preferences = Preferences(
-        languages=[LanguagePreference(language="English", level="Fluent")],
-        locations=["Hong Kong"],
-        gap_tolerance=GapTolerance.YEAR,
     )
     client = TestClient(create_app(assistant))
 
@@ -204,28 +231,31 @@ def test_candidate_page_calls_assistant_for_snapshot_and_preferences() -> None:
     assert response.status_code == 200
     assert "Candidate Snapshot" in response.text
     assert "Alice Example, alice@example.com" in response.text
-    assert "Preferences" in response.text
-    assert "English" in response.text
-    assert "Hong Kong" in response.text
-    assert "Year" in response.text
-    assert "Crawl Filters" not in response.text
+    assert "Hard Constraints file" in response.text
+    assert "Preferences file" in response.text
+    assert "/tmp/hard.txt" in response.text
+    assert "/tmp/prefs.txt" in response.text
+    assert 'action="/crawl/filters"' not in response.text
 
 
-def test_candidate_page_posts_master_cv_path_and_preferences_through_assistant(
-    tmp_path: Path,
-) -> None:
+def test_candidate_page_posts_paths_through_assistant(tmp_path: Path) -> None:
     master_cv_path = tmp_path / "master.tex"
     master_cv_path.write_text(
         r"\documentclass{article}\begin{document}"
         r"\section{Skills}Python\end{document}",
         encoding="utf-8",
     )
+    hc_path = tmp_path / "hard.txt"
+    hc_path.write_text("Hong Kong only\n", encoding="utf-8")
+    prefs_path = tmp_path / "prefs.txt"
+    prefs_path.write_text("Prefer fintech\n", encoding="utf-8")
     assistant = Assistant(
         catalog_store=CatalogStore(tmp_path / "catalog.db"),
         job_board=FakeJobBoardSession(),
         master_cv=DiskMasterCvStore(tmp_path / "master_cv_state"),
         llm_judge=FakeLlmJudge(),
         llm_cv_tailor=FakeLlmCvTailor(),
+        constraint_files=DiskConstraintFilesStore(tmp_path / "constraint_files_state"),
     )
     client = TestClient(create_app(assistant))
 
@@ -234,29 +264,30 @@ def test_candidate_page_posts_master_cv_path_and_preferences_through_assistant(
         data={"master_cv_path": str(master_cv_path)},
         follow_redirects=False,
     )
+    hc_response = client.post(
+        "/candidate/hard-constraints",
+        data={"hard_constraints_path": str(hc_path)},
+        follow_redirects=False,
+    )
     prefs_response = client.post(
         "/candidate/preferences",
-        data={
-            "languages": "English:Fluent\nCantonese",
-            "locations": "Hong Kong\nRemote",
-            "gap_tolerance": "Semester",
-        },
+        data={"preferences_path": str(prefs_path)},
         follow_redirects=False,
     )
 
     assert path_response.status_code == 303
+    assert hc_response.status_code == 303
     assert prefs_response.status_code == 303
     assert assistant.get_master_cv_path() == str(master_cv_path.resolve())
-    assert master_cv_path.read_text(encoding="utf-8").endswith(r"\section{Skills}Python\end{document}")
-    preferences = assistant.get_preferences()
-    assert preferences.languages == [
-        LanguagePreference(language="English", level="Fluent"),
-        LanguagePreference(language="Cantonese", level=None),
-    ]
-    assert preferences.locations == ["Hong Kong", "Remote"]
-    assert preferences.gap_tolerance is GapTolerance.SEMESTER
+    assert assistant.get_hard_constraints_path() == str(hc_path.resolve())
+    assert assistant.get_preferences_path() == str(prefs_path.resolve())
+    assert master_cv_path.read_text(encoding="utf-8").endswith(
+        r"\section{Skills}Python\end{document}"
+    )
+    assert hc_path.read_text(encoding="utf-8") == "Hong Kong only\n"
     page = client.get("/candidate")
     assert "Python" in page.text
+    assert str(hc_path.resolve()) in page.text
 
 
 def test_crawl_page_uses_assistant_for_login_filters_and_run() -> None:

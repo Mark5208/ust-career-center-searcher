@@ -6,6 +6,7 @@ from pathlib import Path
 from job_finding_assistant.assistant import Assistant, CrawlFilters
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.fakes import (
+    FakeConstraintFilesStore,
     FakeCrawlPacer,
     FakeJobBoardSession,
     FakeLlmCvTailor,
@@ -27,6 +28,7 @@ def _assistant(
         master_cv=FakeMasterCvStore(),
         llm_judge=FakeLlmJudge(),
         llm_cv_tailor=FakeLlmCvTailor(),
+        constraint_files=FakeConstraintFilesStore(),
         crawl_pacer=crawl_pacer or FakeCrawlPacer(),
     )
 

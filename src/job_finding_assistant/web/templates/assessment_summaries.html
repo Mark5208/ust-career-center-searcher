@@ -127,6 +127,7 @@
             Pending
             {% else %}
             Hard Constraint: {{ row.summary.hard_constraint_outcome }} ·
+            Preference: {{ row.summary.preference or "unknown" }} ·
             Relevance: {{ row.summary.relevance }} ·
             {% if row.summary.has_preparation_packet %}
             Preparation Packet{% if row.summary.preparation_packet_stale %} (Stale){% endif %}

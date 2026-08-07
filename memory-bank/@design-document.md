@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0014`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0014 and the current `CONTEXT.md` describe the confirmed assessment and Master CV model. The running code still implements the older structured Preferences + LaTeX Master CV + Relevance-only soft band (issue #3–#5 slices). Do not treat the code as the glossary source until a later implementation pass.
+**Docs vs code:** ADRs 0005–0006, 0008, 0010, and 0014 assessment freshness are implemented through `Assistant` (freeform HC/Preferences paths, three LLM signals, Pending-first rejudge). Master CV remains LaTeX until the YAML ticket. Prepare / Gap Report / Edit Summary / packets (ADRs 0007, 0009, 0011–0013) are still ahead of code.
 
 ## Primary seam
 
@@ -24,31 +24,25 @@ Structured languages / locations / Gap Tolerance Preferences form is superseded 
 
 ### Assessment freshness (ADR-0014)
 
-Docs ahead of fingerprint / Pending-first implementation:
+Implemented through `Assistant.refresh_candidate_file_state` + `rejudge_pending_assessments`:
 
 - Candidate-file “change” = content or path clear (fingerprint on next check); not path-only; no always-on watcher.
-- On change: Snapshot now; **all** assessments Pending (Open and Closed); packets Stale; re-judge async/opportunistic.
-- Crawl: catalog sync independent of assessment; new/detail-changed → Pending then async re-judge; Crawl does not Stale packets (ADR-0013).
+- On change: Snapshot now; **all** assessments Pending (Open and Closed); re-judge opportunistic (catalog UI on load).
+- Crawl: catalog sync independent of assessment; new/detail-changed → Pending then opportunistic re-judge; Crawl does not Stale packets (ADR-0013; packets still absent).
 - Unreadable Master CV → no Snapshot, Pending + error; unreadable HC/Prefs path → unknown + path error (not Pending).
+- Judge failure → leave Pending (never half-assessed final row).
 
 ### Hard Constraint rubric (ADR-0010)
 
-Docs ahead of freeform Hard Constraint `LlmJudge` implementation:
+Implemented at the `LlmJudge.judge_hard_constraint` call site (Fake in tests; live provider still thin):
 
 - Inputs: Hard Constraints file + Job Posting only (never CV, never Preferences).
-- Precedence: fail if any clear violation; else unknown if any applicable line unknown; else pass.
-- Conservative inference (under-fail); soft “prefer…” misfiled in HC does not fail.
-- Short reason always; light HC↔posting Evidence on fail/unknown. Fail/unknown do not block Prepare (fail confirms per ADR-0013).
+- Empty/missing file → unknown without judge; unreadable path → unknown + error.
+- Precedence / conservative inference belong in the live judge prompt (ADR-0010); Fake scripts outcomes.
 
 ### Judge rubrics (ADR-0008)
 
-Preference and Relevance band criteria (docs ahead of `LlmJudge` implementation):
-
-- Strict input isolation: Preference never sees the CV; Relevance never sees the Preferences file.
-- Preference: coverage of likes/avoids; hierarchy if written; posting silence → unknown (leans Mixed); clear avoid → Weak; short reason output.
-- Relevance: required-first; Evidence pairs (~3–7); never invent CV content; conservative adjacency (Mixed ceiling unless core evidenced); vague JD → Mixed.
-
-**Non-goal this version:** A guided chatbot that grills the user to clarify experience before judging. Rubrics assume the user already wrote clear Master CV and Preferences text.
+Preference and Relevance call sites enforce input isolation (`judge_preference` never sees CV; `judge_relevance` never sees Preferences). Band criteria live in the live judge prompt; Fake scripts bands for tests.
 
 ## Decided Master CV format (ADR-0007)
 
@@ -102,15 +96,16 @@ Docs ahead of `prepare()` implementation:
 
 Deliver a runnable local shell: FastAPI + Jinja, SQLite `CatalogStore` (minimal schema), fakeable ports, and an empty-catalog Assessment Summary path proven through `Assistant` without Playwright or a real LLM.
 
-## Master CV / Snapshot / Preferences slice (issue #3) — as shipped in code
+## Master CV / Snapshot / constraint files slice (issue #3 + #11 migration)
 
-Through `Assistant` and `/candidate` UI (legacy until migration):
+Through `Assistant` and `/candidate` UI:
 
 - Set/update Master CV LaTeX path; never overwrite the Master CV file (`DiskMasterCvStore` reads only).
 - Rebuild inspectable Candidate Snapshot from Master CV sections (contact, education, experience, projects, skills/tools as written); not hand-editable.
-- Persist structured Preferences (languages with optional level, locations, Gap Tolerance) in SQLite; no Crawl Filters on Preferences.
+- Set Hard Constraints and Preferences plain-text file paths (`DiskConstraintFilesStore`); tool reads only; empty/missing → unknown without judge.
+- Structured languages / locations / Gap Tolerance Preferences form removed (ADR-0005).
 
-Target after migration: Master CV YAML path; Hard Constraints file path; Preferences file path; Snapshot from RenderCV YAML.
+Target after YAML ticket: Master CV YAML path; Snapshot from RenderCV YAML.
 
 ## Crawl slice (issue #4)
 
@@ -124,14 +119,13 @@ Through `Assistant` and `/crawl` UI, with primary tests on a fake `JobBoardSessi
 - Live board: Playwright `JobBoardSession` using selectors from `.scratch/job-board-dom.md`.
 - `CrawlPacer` random delays before detail fetches and between list pages (tested via recording fake; no real sleep in primary tests).
 
-## Assessment slice (issue #5) — as shipped in code
+## Assessment slice (issue #11) — as shipped in code
 
-Through `Assistant` and `/` Assessment Summary UI (legacy soft band until migration):
+Through `Assistant` and `/` Assessment Summary UI:
 
-- Assessment Summary shows title, employer, Listing status, Deadline status, overall Hard Constraint outcome, Relevance, Preparation Packet presence/Stale (packet absent in this slice).
-- Default filter: Open + Deadline Upcoming/Unknown; Closed and Deadline Passed toggleable; sort Relevance then sooner deadline; Hard Constraint fail after pass/unknown; Pending last.
-- Hard Constraints (language, location, Gap Tolerance) are rule-based with short reasons (`hard_constraints`); pure-rule tests allowed at that seam.
-- Relevance Strong/Mixed/Weak (+ Evidence) via `LlmJudge` (fakeable); Match Assessment stays Pending when the judge is unavailable; Prepare unavailable while Pending.
-- Rebuild Match Assessments for new/changed Crawl detail, and for Open postings when Master CV path or Preferences change.
+- Assessment Summary shows title, employer, Listing status, Deadline status, Hard Constraint, Preference, Relevance, Preparation Packet presence/Stale (packet absent in this slice).
+- Default filter: Open + Deadline Upcoming/Unknown; Closed and Deadline Passed toggleable; sort Pending last, Hard Constraint fail after pass/unknown, Preference then Relevance, sooner deadline (Deadline Unknown last among ties).
+- Hard Constraint / Preference / Relevance via fakeable `LlmJudge` with input isolation; empty HC/Prefs → unknown without judge; Prepare unavailable only while Pending (HC fail does not block).
+- Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic `rejudge_pending_assessments`.
 
-Target after migration: show Preference + Relevance; LLM Hard Constraint from freeform file; sort Preference then Relevance (Deadline Unknown last among ties); on Master CV / HC / Preferences change mark **all** assessments Pending then async re-judge (ADR-0014); Crawl Pending-first; judge bands per ADR-0008 (ADR-0005, ADR-0006).
+Prepare / packets / Delete / YAML Master CV remain later tickets (#12–#14).

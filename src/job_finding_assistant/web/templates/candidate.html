@@ -60,9 +60,7 @@
         margin-bottom: 0.35rem;
         font-size: 0.95rem;
       }
-      input[type="text"],
-      textarea,
-      select {
+      input[type="text"] {
         width: 100%;
         box-sizing: border-box;
         margin-bottom: 0.75rem;
@@ -100,6 +98,11 @@
         font-size: 0.9rem;
         margin-bottom: 0.75rem;
       }
+      .errors {
+        margin-top: 1rem;
+        color: #8a3b2f;
+        font-size: 0.92rem;
+      }
     </style>
   </head>
   <body>
@@ -109,7 +112,7 @@
         <a href="/crawl">Crawl</a>
       </nav>
       <h1>Job Finding Assistant</h1>
-      <p>Master CV path, inspectable Candidate Snapshot, and Preferences.</p>
+      <p>Master CV, Hard Constraints, and Preferences file paths (tool reads only).</p>
 
       <h2>Master CV</h2>
       <p class="hint">The tool never overwrites your Master CV file.</p>
@@ -176,28 +179,51 @@
       <p class="empty">No Candidate Snapshot yet. Set a Master CV path to rebuild it.</p>
       {% endif %}
 
-      <h2>Preferences</h2>
+      <h2>Hard Constraints file</h2>
       <p class="hint">
-        Hard Constraint inputs only (languages, locations, Gap Tolerance). Empty fields leave
-        related Hard Constraints unknown later.
+        Plain-text non-negotiables. Empty or missing means unknown without a judge call.
+        The tool never overwrites this file.
+      </p>
+      <form method="post" action="/candidate/hard-constraints">
+        <label for="hard_constraints_path">Hard Constraints file path</label>
+        <input
+          id="hard_constraints_path"
+          name="hard_constraints_path"
+          type="text"
+          value="{{ hard_constraints_path }}"
+        />
+        <button type="submit">Set Hard Constraints path</button>
+      </form>
+      <form method="post" action="/candidate/hard-constraints/clear">
+        <button type="submit">Clear Hard Constraints path</button>
+      </form>
+
+      <h2>Preferences file</h2>
+      <p class="hint">
+        Plain-text soft priorities (not Crawl Filters, not Hard Constraints). Empty or
+        missing means unknown without a judge call. The tool never overwrites this file.
       </p>
       <form method="post" action="/candidate/preferences">
-        <label for="languages">Languages (one per line; optional level after a colon)</label>
-        <textarea id="languages" name="languages" rows="4">{{ languages_text }}</textarea>
-        <label for="locations">Acceptable work locations (one per line)</label>
-        <textarea id="locations" name="locations" rows="3">{{ locations_text }}</textarea>
-        <label for="gap_tolerance">Gap Tolerance</label>
-        <select id="gap_tolerance" name="gap_tolerance">
-          <option value="unset" {% if gap_tolerance == "unset" %}selected{% endif %}>Unset</option>
-          <option value="None" {% if gap_tolerance == "None" %}selected{% endif %}>None</option>
-          <option value="Semester" {% if gap_tolerance == "Semester" %}selected{% endif %}>
-            Semester
-          </option>
-          <option value="Year" {% if gap_tolerance == "Year" %}selected{% endif %}>Year</option>
-          <option value="Any" {% if gap_tolerance == "Any" %}selected{% endif %}>Any</option>
-        </select>
-        <button type="submit">Save Preferences</button>
+        <label for="preferences_path">Preferences file path</label>
+        <input
+          id="preferences_path"
+          name="preferences_path"
+          type="text"
+          value="{{ preferences_path }}"
+        />
+        <button type="submit">Set Preferences path</button>
       </form>
+      <form method="post" action="/candidate/preferences/clear">
+        <button type="submit">Clear Preferences path</button>
+      </form>
+
+      {% if candidate_file_errors %}
+      <ul class="errors">
+        {% for error in candidate_file_errors %}
+        <li>{{ error }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
     </main>
   </body>
 </html>

@@ -3,9 +3,14 @@
 from typing import Protocol, runtime_checkable
 
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
+from job_finding_assistant.constraint_files import ConstraintFileRead
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
-from job_finding_assistant.match_assessment import JudgeResult
+from job_finding_assistant.match_assessment import (
+    HardConstraintJudgment,
+    PreferenceJudgment,
+    RelevanceJudgment,
+)
 
 
 @runtime_checkable
@@ -51,19 +56,64 @@ class MasterCvStore(Protocol):
 
 
 @runtime_checkable
+class ConstraintFilesStore(Protocol):
+    """Reads Hard Constraints and Preferences file paths (never writes those files)."""
+
+    def hard_constraints_path(self) -> str | None:
+        """Return the configured Hard Constraints path, if any."""
+
+    def preferences_path(self) -> str | None:
+        """Return the configured Preferences path, if any."""
+
+    def set_hard_constraints_path(self, path: str) -> None:
+        """Set the Hard Constraints file path without modifying that file."""
+
+    def clear_hard_constraints_path(self) -> None:
+        """Clear the Hard Constraints path."""
+
+    def set_preferences_path(self, path: str) -> None:
+        """Set the Preferences file path without modifying that file."""
+
+    def clear_preferences_path(self) -> None:
+        """Clear the Preferences path."""
+
+    def read_hard_constraints(self) -> ConstraintFileRead:
+        """Read the Hard Constraints file (read-only)."""
+
+    def read_preferences(self) -> ConstraintFileRead:
+        """Read the Preferences file (read-only)."""
+
+
+@runtime_checkable
 class LlmJudge(Protocol):
-    """LLM port for Relevance and Evidence pairs."""
+    """LLM port for Hard Constraint, Preference, and Relevance judgments."""
 
     def available(self) -> bool:
         """Return whether the judge port can be used."""
 
-    def judge(
+    def judge_hard_constraint(
+        self,
+        *,
+        hard_constraints_text: str,
+        job_detail_fields: dict[str, str],
+    ) -> HardConstraintJudgment:
+        """Judge Hard Constraints against the Job Posting only (never CV / Preferences)."""
+
+    def judge_preference(
+        self,
+        *,
+        preferences_text: str,
+        job_detail_fields: dict[str, str],
+    ) -> PreferenceJudgment:
+        """Judge Preferences against the Job Posting only (never CV)."""
+
+    def judge_relevance(
         self,
         *,
         job_detail_fields: dict[str, str],
-        candidate_snapshot: CandidateSnapshot | None,
-    ) -> JudgeResult:
-        """Return Relevance and Evidence for one Job Posting."""
+        candidate_snapshot: CandidateSnapshot,
+    ) -> RelevanceJudgment:
+        """Judge Relevance from Snapshot/CV vs Job Posting only (never Preferences)."""
 
 
 @runtime_checkable

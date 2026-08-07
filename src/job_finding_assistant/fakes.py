@@ -1,11 +1,20 @@
-"""In-memory fakes for Job Board / LLM / Master CV ports used in tests."""
+"""In-memory fakes for Job Board / LLM / Master CV / constraint-file ports used in tests."""
 
 from pathlib import Path
 
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot, build_candidate_snapshot
+from job_finding_assistant.constraint_files import ConstraintFileRead, read_constraint_file
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
-from job_finding_assistant.match_assessment import EvidencePair, JudgeResult, RelevanceBand
+from job_finding_assistant.match_assessment import (
+    ConstraintOutcome,
+    EvidencePair,
+    HardConstraintJudgment,
+    PreferenceBand,
+    PreferenceJudgment,
+    RelevanceBand,
+    RelevanceJudgment,
+)
 
 
 class FakeCrawlPacer:
@@ -129,18 +138,65 @@ class FakeMasterCvStore:
         self._snapshot = build_candidate_snapshot(latex_path.read_text(encoding="utf-8"))
 
 
+class FakeConstraintFilesStore:
+    def __init__(
+        self,
+        *,
+        hard_constraints_path: str | None = None,
+        preferences_path: str | None = None,
+    ) -> None:
+        self._hard_constraints_path = hard_constraints_path
+        self._preferences_path = preferences_path
+
+    def hard_constraints_path(self) -> str | None:
+        return self._hard_constraints_path
+
+    def preferences_path(self) -> str | None:
+        return self._preferences_path
+
+    def set_hard_constraints_path(self, path: str) -> None:
+        self._hard_constraints_path = str(Path(path).expanduser().resolve())
+
+    def clear_hard_constraints_path(self) -> None:
+        self._hard_constraints_path = None
+
+    def set_preferences_path(self, path: str) -> None:
+        self._preferences_path = str(Path(path).expanduser().resolve())
+
+    def clear_preferences_path(self) -> None:
+        self._preferences_path = None
+
+    def read_hard_constraints(self) -> ConstraintFileRead:
+        return read_constraint_file(self._hard_constraints_path)
+
+    def read_preferences(self) -> ConstraintFileRead:
+        return read_constraint_file(self._preferences_path)
+
+
 class FakeLlmJudge:
-    """Scripted Relevance/Evidence; unavailable when `available` is False."""
+    """Scripted three-signal judgments; records call inputs for isolation checks."""
 
     def __init__(
         self,
         *,
         available: bool = True,
+        hard_constraint_outcome: ConstraintOutcome = "pass",
+        hard_constraint_reason: str = "No hard constraint violations",
+        preference: PreferenceBand = "Mixed",
+        preference_reason: str = "Partial preference fit",
+        preferences: list[PreferenceBand] | None = None,
         relevance: RelevanceBand = "Mixed",
         relevances: list[RelevanceBand] | None = None,
         evidence: list[EvidencePair] | None = None,
+        fail_on_call: bool = False,
     ) -> None:
         self._available = available
+        self._hard_constraint_outcome = hard_constraint_outcome
+        self._hard_constraint_reason = hard_constraint_reason
+        self._preference = preference
+        self._preference_reason = preference_reason
+        self._preferences = list(preferences) if preferences is not None else None
+        self._preference_index = 0
         self._relevance = relevance
         self._relevances = list(relevances) if relevances is not None else None
         self._relevance_index = 0
@@ -154,27 +210,83 @@ class FakeLlmJudge:
                 )
             ]
         )
+        self._fail_on_call = fail_on_call
         self.judge_calls = 0
+        self.hard_constraint_calls: list[dict[str, object]] = []
+        self.preference_calls: list[dict[str, object]] = []
+        self.relevance_calls: list[dict[str, object]] = []
 
     def available(self) -> bool:
         return self._available
 
-    def judge(
+    def judge_hard_constraint(
+        self,
+        *,
+        hard_constraints_text: str,
+        job_detail_fields: dict[str, str],
+    ) -> HardConstraintJudgment:
+        if not self._available or self._fail_on_call:
+            raise RuntimeError("FakeLlmJudge is not available")
+        self.judge_calls += 1
+        self.hard_constraint_calls.append(
+            {
+                "hard_constraints_text": hard_constraints_text,
+                "job_detail_fields": dict(job_detail_fields),
+            }
+        )
+        return HardConstraintJudgment(
+            outcome=self._hard_constraint_outcome,
+            reason=self._hard_constraint_reason,
+            evidence=[],
+        )
+
+    def judge_preference(
+        self,
+        *,
+        preferences_text: str,
+        job_detail_fields: dict[str, str],
+    ) -> PreferenceJudgment:
+        if not self._available or self._fail_on_call:
+            raise RuntimeError("FakeLlmJudge is not available")
+        self.judge_calls += 1
+        self.preference_calls.append(
+            {
+                "preferences_text": preferences_text,
+                "job_detail_fields": dict(job_detail_fields),
+            }
+        )
+        if self._preferences is not None:
+            preference = self._preferences[self._preference_index]
+            self._preference_index += 1
+        else:
+            preference = self._preference
+        return PreferenceJudgment(
+            preference=preference,
+            reason=self._preference_reason,
+            evidence=[],
+        )
+
+    def judge_relevance(
         self,
         *,
         job_detail_fields: dict[str, str],
-        candidate_snapshot: CandidateSnapshot | None,
-    ) -> JudgeResult:
-        del job_detail_fields, candidate_snapshot
-        if not self._available:
+        candidate_snapshot: CandidateSnapshot,
+    ) -> RelevanceJudgment:
+        if not self._available or self._fail_on_call:
             raise RuntimeError("FakeLlmJudge is not available")
         self.judge_calls += 1
+        self.relevance_calls.append(
+            {
+                "job_detail_fields": dict(job_detail_fields),
+                "candidate_snapshot": candidate_snapshot,
+            }
+        )
         if self._relevances is not None:
             relevance = self._relevances[self._relevance_index]
             self._relevance_index += 1
         else:
             relevance = self._relevance
-        return JudgeResult(relevance=relevance, evidence=list(self._evidence))
+        return RelevanceJudgment(relevance=relevance, evidence=list(self._evidence))
 
 
 class FakeLlmCvTailor:
