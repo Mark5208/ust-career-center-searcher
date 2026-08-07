@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0014`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0014 Prepare/assessment/CV slices through `Assistant` are implemented for Match Assessment, Master CV Snapshot, constraint files, Crawl, and Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale). Delete (ADR-0013 remainder) and live LLM/RenderCV providers remain ahead of production wiring.
+**Docs vs code:** ADRs 0005–0014 Prepare/assessment/CV slices through `Assistant` are implemented for Match Assessment, Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), and Delete cascade. Live LLM/RenderCV providers remain ahead of production wiring.
 
 ## Primary seam
 
@@ -82,7 +82,7 @@ Implemented through `Assistant.prepare` / `get_preparation_packet` / downloads:
 - PDF-only failure may leave packet without PDF; tailor/LLM mid-run failure is atomic (prior packet untouched).
 - Stale only when Master CV / HC file / Preferences file change; Stale packets stay readable with banner; Crawl detail does not Stale.
 - Tool-managed packet store (keyed by Job Posting); download PDF/YAML; Gap Report / Edit Summary UI-only in v1.
-- Delete confirms then hard-removes posting + assessment + packet — still ahead (issue #14).
+- Delete confirms then hard-removes posting + assessment + packet (no trash/undo).
 
 ## Scaffold slice (issue #2)
 
@@ -121,4 +121,4 @@ Through `Assistant` and `/` Assessment Summary UI:
 - Hard Constraint / Preference / Relevance via fakeable `LlmJudge` with input isolation; empty HC/Prefs → unknown without judge; Prepare unavailable only while Pending (HC fail does not block).
 - Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic `rejudge_pending_assessments`.
 
-Prepare / packets shipped in #13; Delete remains later ticket (#14).
+Prepare / packets / Delete shipped in #13–#14.

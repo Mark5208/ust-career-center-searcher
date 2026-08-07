@@ -9,6 +9,7 @@ from job_finding_assistant.assistant import (
     Assistant,
     CrawlFilters,
     CrawlOutcome,
+    DeleteNeedsConfirm,
     PreparationPacketView,
 )
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
@@ -56,6 +57,12 @@ class _RecordingAssistant:
         self.prepare_calls: list[str] = []
         self.get_packet_calls: list[str] = []
         self.packet_views: dict[str, PreparationPacketView] = {}
+        self.delete_calls: list[tuple[str, bool]] = []
+        self.delete_needs_confirm = False
+        self.delete_confirm_reason = (
+            "Delete permanently removes Job Posting 'System Engineer — Example Corp', "
+            "Match Assessment, and Preparation Packet. No undo."
+        )
 
     def list_assessment_summaries(
         self,
@@ -106,6 +113,14 @@ class _RecordingAssistant:
     def get_tailored_pdf(self, job_posting_id: str) -> bytes | None:
         view = self.packet_views.get(job_posting_id)
         return view.packet.pdf_bytes if view else None
+
+    def delete(self, job_posting_id: str, *, confirm: bool = False) -> None:
+        self.delete_calls.append((job_posting_id, confirm))
+        if self.delete_needs_confirm and not confirm:
+            raise DeleteNeedsConfirm(self.delete_confirm_reason)
+        self.summaries = [
+            row for row in self.summaries if row.job_posting_id != job_posting_id
+        ]
 
     def rejudge_pending_assessments(self) -> None:
         self.rejudge_calls += 1
@@ -435,3 +450,44 @@ def test_catalog_prepare_and_packet_routes_use_assistant() -> None:
     pdf_resp = client.get("/jobs/86534/packet/pdf")
     assert pdf_resp.status_code == 200
     assert pdf_resp.content.startswith(b"%PDF")
+
+
+def test_catalog_delete_route_uses_assistant_with_confirm() -> None:
+    assistant = _RecordingAssistant()
+    assistant.delete_needs_confirm = True
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="pass",
+            preference="Strong",
+            relevance="Strong",
+            has_preparation_packet=True,
+        )
+    ]
+    client = TestClient(create_app(assistant))
+
+    catalog = client.get("/")
+    assert catalog.status_code == 200
+    assert "Delete" in catalog.text
+
+    needs_confirm = client.post("/jobs/86534/delete", follow_redirects=False)
+    assert needs_confirm.status_code == 200
+    assert "Confirm Delete" in needs_confirm.text
+    assert "System Engineer" in needs_confirm.text
+    assert "Match Assessment" in needs_confirm.text
+    assert "Preparation Packet" in needs_confirm.text
+    assert assistant.delete_calls == [("86534", False)]
+
+    confirmed = client.post(
+        "/jobs/86534/delete",
+        data={"confirm": "1"},
+        follow_redirects=False,
+    )
+    assert confirmed.status_code == 303
+    assert confirmed.headers["location"] == "/"
+    assert assistant.delete_calls == [("86534", False), ("86534", True)]

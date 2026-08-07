@@ -33,6 +33,7 @@ __all__ = [
     "Assistant",
     "CrawlFilters",
     "CrawlOutcome",
+    "DeleteNeedsConfirm",
     "PreparationPacketView",
     "PrepareBlockedError",
     "PrepareFailedError",
@@ -55,6 +56,14 @@ class PrepareNeedsConfirm(Exception):
 
 class PrepareFailedError(Exception):
     """Tailor/LLM failed mid-run; prior packet (if any) was left untouched."""
+
+
+class DeleteNeedsConfirm(Exception):
+    """Delete requires an explicit confirm before hard-removing artifacts."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -274,6 +283,29 @@ class Assistant:
         if packet is None:
             return None
         return packet.pdf_bytes
+
+    def delete(self, job_posting_id: str, *, confirm: bool = False) -> None:
+        """Hard-remove a Job Posting, its Match Assessment, and Preparation Packet.
+
+        Always requires confirm. The confirm reason names the Job Posting, Match
+        Assessment, and Preparation Packet (if any). No trash or undo.
+        """
+        posting = self._catalog_store.get_job_posting(job_posting_id)
+        if posting is None:
+            return
+        title = posting.get("title") or job_posting_id
+        employer = posting.get("employer") or ""
+        has_packet = self._packet_store.get(job_posting_id) is not None
+        if not confirm:
+            parts = [f"Job Posting '{title} — {employer}'", "Match Assessment"]
+            if has_packet:
+                parts.append("Preparation Packet")
+            named = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+            raise DeleteNeedsConfirm(
+                f"Delete permanently removes {named}. No undo."
+            )
+        self._packet_store.delete(job_posting_id)
+        self._catalog_store.delete_job_posting(job_posting_id)
 
     def set_master_cv_path(self, path: str) -> None:
         """Point at a Master CV RenderCV YAML file; never overwrites that file."""

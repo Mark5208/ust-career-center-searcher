@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Confirm Delete — Job Finding Assistant</title>
+    <style>
+      :root {
+        --ink: #1a2332;
+        --muted: #5a6570;
+        --paper: #f3f6f8;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background: linear-gradient(180deg, #dfe8ee 0%, var(--paper) 40%, #eef2f4 100%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 36rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+      }
+      h1 { font-size: 1.75rem; margin: 0 0 0.75rem; }
+      p { color: var(--muted); line-height: 1.5; }
+      button {
+        margin-top: 1rem;
+        font: inherit;
+        padding: 0.45rem 0.9rem;
+        cursor: pointer;
+      }
+      a { color: #5a6570; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Confirm Delete</h1>
+      <p>{{ message }}</p>
+      <form method="post" action="/jobs/{{ job_posting_id }}/delete">
+        <input type="hidden" name="confirm" value="1" />
+        <button type="submit">Confirm Delete</button>
+      </form>
+      <p><a href="/">Cancel</a></p>
+    </main>
+  </body>
+</html>

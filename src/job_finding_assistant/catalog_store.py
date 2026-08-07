@@ -397,6 +397,18 @@ class CatalogStore:
                 (listing_status, job_posting_id),
             )
 
+    def delete_job_posting(self, job_posting_id: str) -> None:
+        """Hard-remove one Job Posting and its Match Assessment (if any)."""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM match_assessments WHERE job_posting_id = ?",
+                (job_posting_id,),
+            )
+            connection.execute(
+                "DELETE FROM job_postings WHERE id = ?",
+                (job_posting_id,),
+            )
+
     def mark_missing_open_postings_closed(self, seen_ids: set[str]) -> None:
         """Mark Open postings absent from a Closing-capable list sync as Closed."""
         with self._connect() as connection:

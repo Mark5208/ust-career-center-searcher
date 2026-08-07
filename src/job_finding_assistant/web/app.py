@@ -16,6 +16,7 @@ from job_finding_assistant.assistant import (
     Assistant,
     CrawlFilters,
     CrawlOutcome,
+    DeleteNeedsConfirm,
     PreparationPacketView,
     PrepareBlockedError,
     PrepareFailedError,
@@ -60,6 +61,9 @@ class SupportsAssistantUi(Protocol):
 
     def get_tailored_pdf(self, job_posting_id: str) -> bytes | None:
         """Return Tailored PDF for download."""
+
+    def delete(self, job_posting_id: str, *, confirm: bool = False) -> None:
+        """Hard-remove Job Posting, Match Assessment, and Preparation Packet."""
 
     def rejudge_pending_assessments(self) -> None:
         """Opportunistically judge Pending Match Assessments."""
@@ -200,6 +204,27 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
             request.app.state.prepare_error = str(exc)
             return RedirectResponse(url="/", status_code=303)
         return RedirectResponse(url=f"/jobs/{job_posting_id}/packet", status_code=303)
+
+    @app.post("/jobs/{job_posting_id}/delete")
+    def delete_job(
+        request: Request,
+        job_posting_id: str,
+        confirm: str = Form("0"),
+    ) -> Response:
+        current = request.app.state.assistant
+        try:
+            current.delete(job_posting_id, confirm=confirm == "1")
+        except DeleteNeedsConfirm as exc:
+            return _TEMPLATES.TemplateResponse(
+                request,
+                "delete_confirm.html",
+                {
+                    "job_posting_id": job_posting_id,
+                    "message": exc.reason,
+                },
+                status_code=200,
+            )
+        return RedirectResponse(url="/", status_code=303)
 
     @app.get("/jobs/{job_posting_id}/packet", response_class=HTMLResponse)
     def packet_page(request: Request, job_posting_id: str) -> Response:
