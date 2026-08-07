@@ -16,12 +16,10 @@ from job_finding_assistant.assistant import (
     Assistant,
     CrawlFilters,
     CrawlOutcome,
-    GapTolerance,
-    LanguagePreference,
-    Preferences,
 )
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
+from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.fakes import FakeLlmCvTailor, FakeLlmJudge
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
 
@@ -40,6 +38,9 @@ class SupportsAssistantUi(Protocol):
     def can_prepare(self, job_posting_id: str) -> bool:
         """Return whether Prepare is available for the Job Posting."""
 
+    def rejudge_pending_assessments(self) -> None:
+        """Opportunistically judge Pending Match Assessments."""
+
     def get_master_cv_path(self) -> str | None:
         """Return the configured Master CV path."""
 
@@ -49,11 +50,26 @@ class SupportsAssistantUi(Protocol):
     def get_candidate_snapshot(self) -> CandidateSnapshot | None:
         """Return the Candidate Snapshot."""
 
-    def get_preferences(self) -> Preferences:
-        """Return Preferences."""
+    def get_hard_constraints_path(self) -> str | None:
+        """Return the Hard Constraints file path."""
 
-    def update_preferences(self, preferences: Preferences) -> None:
-        """Persist Preferences."""
+    def set_hard_constraints_path(self, path: str) -> None:
+        """Set the Hard Constraints file path."""
+
+    def clear_hard_constraints_path(self) -> None:
+        """Clear the Hard Constraints path."""
+
+    def get_preferences_path(self) -> str | None:
+        """Return the Preferences file path."""
+
+    def set_preferences_path(self, path: str) -> None:
+        """Set the Preferences file path."""
+
+    def clear_preferences_path(self) -> None:
+        """Clear the Preferences path."""
+
+    def get_candidate_file_errors(self) -> list[str]:
+        """Return path/read errors for candidate files."""
 
     def get_crawl_filters(self) -> CrawlFilters:
         """Return Crawl Filters."""
@@ -69,33 +85,6 @@ class SupportsAssistantUi(Protocol):
 
     def run_crawl(self, *, full_refresh: bool = False) -> CrawlOutcome:
         """Run Incremental Crawl or Full Refresh."""
-
-
-def _parse_languages(raw: str) -> list[LanguagePreference]:
-    languages: list[LanguagePreference] = []
-    for line in raw.splitlines():
-        text = line.strip()
-        if not text:
-            continue
-        if ":" in text:
-            name, level = text.split(":", 1)
-            languages.append(
-                LanguagePreference(language=name.strip(), level=level.strip() or None)
-            )
-        else:
-            languages.append(LanguagePreference(language=text, level=None))
-    return languages
-
-
-def _parse_locations(raw: str) -> list[str]:
-    return [line.strip() for line in raw.splitlines() if line.strip()]
-
-
-def _parse_gap_tolerance(raw: str) -> GapTolerance | None:
-    text = raw.strip()
-    if not text or text == "unset":
-        return None
-    return GapTolerance(text)
 
 
 def _parse_lines(raw: str) -> tuple[str, ...]:
@@ -124,6 +113,7 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
         show_closed = include_closed == "1"
         show_passed = include_passed_deadlines == "1"
         current = request.app.state.assistant
+        current.rejudge_pending_assessments()
         summaries = current.list_assessment_summaries(
             include_closed=show_closed,
             include_passed_deadlines=show_passed,
@@ -148,26 +138,15 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
     @app.get("/candidate", response_class=HTMLResponse)
     def candidate_page(request: Request) -> HTMLResponse:
         current = request.app.state.assistant
-        preferences = current.get_preferences()
-        languages_text = "\n".join(
-            f"{item.language}:{item.level}" if item.level else item.language
-            for item in preferences.languages
-        )
-        locations_text = "\n".join(preferences.locations)
-        gap_value = (
-            preferences.gap_tolerance.value
-            if preferences.gap_tolerance is not None
-            else "unset"
-        )
         return _TEMPLATES.TemplateResponse(
             request,
             "candidate.html",
             {
                 "master_cv_path": current.get_master_cv_path() or "",
                 "snapshot": current.get_candidate_snapshot(),
-                "languages_text": languages_text,
-                "locations_text": locations_text,
-                "gap_tolerance": gap_value,
+                "hard_constraints_path": current.get_hard_constraints_path() or "",
+                "preferences_path": current.get_preferences_path() or "",
+                "candidate_file_errors": current.get_candidate_file_errors(),
             },
         )
 
@@ -176,19 +155,30 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
         app.state.assistant.set_master_cv_path(master_cv_path.strip())
         return RedirectResponse(url="/candidate", status_code=303)
 
-    @app.post("/candidate/preferences")
-    def update_preferences(
-        languages: str = Form(""),
-        locations: str = Form(""),
-        gap_tolerance: str = Form("unset"),
+    @app.post("/candidate/hard-constraints")
+    def set_hard_constraints_path(
+        hard_constraints_path: str = Form(""),
     ) -> RedirectResponse:
-        app.state.assistant.update_preferences(
-            Preferences(
-                languages=_parse_languages(languages),
-                locations=_parse_locations(locations),
-                gap_tolerance=_parse_gap_tolerance(gap_tolerance),
-            )
-        )
+        text = hard_constraints_path.strip()
+        if text:
+            app.state.assistant.set_hard_constraints_path(text)
+        return RedirectResponse(url="/candidate", status_code=303)
+
+    @app.post("/candidate/hard-constraints/clear")
+    def clear_hard_constraints_path() -> RedirectResponse:
+        app.state.assistant.clear_hard_constraints_path()
+        return RedirectResponse(url="/candidate", status_code=303)
+
+    @app.post("/candidate/preferences")
+    def set_preferences_path(preferences_path: str = Form("")) -> RedirectResponse:
+        text = preferences_path.strip()
+        if text:
+            app.state.assistant.set_preferences_path(text)
+        return RedirectResponse(url="/candidate", status_code=303)
+
+    @app.post("/candidate/preferences/clear")
+    def clear_preferences_path() -> RedirectResponse:
+        app.state.assistant.clear_preferences_path()
         return RedirectResponse(url="/candidate", status_code=303)
 
     @app.get("/crawl", response_class=HTMLResponse)
@@ -278,6 +268,7 @@ def build_default_assistant(db_path: Path | None = None) -> Assistant:
         master_cv=DiskMasterCvStore(data_dir / "master_cv_state"),
         llm_judge=FakeLlmJudge(),
         llm_cv_tailor=FakeLlmCvTailor(),
+        constraint_files=DiskConstraintFilesStore(data_dir / "constraint_files_state"),
         crawl_pacer=crawl_pacer,
     )
 

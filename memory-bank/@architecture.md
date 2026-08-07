@@ -6,19 +6,19 @@ Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 
 
 - **UI:** FastAPI + Jinja, single-user local server (`job_finding_assistant.web.app`).
 - **Application seam:** `Assistant` — the only surface the UI and automated tests call.
-- **Persistence:** SQLite via `CatalogStore` (Job Postings, Preferences, Crawl Filters, Match Assessments; later Preparation Packet metadata).
+- **Persistence:** SQLite via `CatalogStore` (Job Postings, Crawl Filters, Match Assessments, candidate-file fingerprints; later Preparation Packet metadata).
 - **Master CV:** LaTeX on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the `.tex` file).
+- **Hard Constraints / Preferences:** plain-text file paths via `DiskConstraintFilesStore` (tool reads only; empty/missing → unknown without judge).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests.
 - **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
-- **Hard Constraints:** pure rules in `hard_constraints` (language, location, Gap Tolerance).
-- **LLM ports:** `LlmJudge` (Relevance / Evidence), `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary); faked in tests.
+- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary); faked in tests.
 
 ```
 Browser → FastAPI/Jinja → Assistant → CatalogStore (SQLite)
                               ├→ JobBoardSession (Playwright live / Fake in tests)
                               ├→ CrawlPacer (Random live / Fake or NoOp in tests)
                               ├→ MasterCvStore (DiskMasterCvStore)
-                              ├→ hard_constraints (pure rules)
+                              ├→ ConstraintFilesStore (DiskConstraintFilesStore)
                               ├→ LlmJudge
                               └→ LlmCvTailor
 ```
@@ -40,32 +40,35 @@ CREATE TABLE IF NOT EXISTS job_postings (
     list_fingerprint TEXT
 );
 
-CREATE TABLE IF NOT EXISTS preferences (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    languages_json TEXT NOT NULL,
-    locations_json TEXT NOT NULL,
-    gap_tolerance TEXT
-);
-
 CREATE TABLE IF NOT EXISTS crawl_filters (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     filters_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS candidate_fingerprints (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    master_cv_fingerprint TEXT,
+    hard_constraints_fingerprint TEXT,
+    preferences_fingerprint TEXT
+);
+
 CREATE TABLE IF NOT EXISTS match_assessments (
     job_posting_id TEXT PRIMARY KEY,
     hard_constraint_outcome TEXT NOT NULL,
-    hard_constraints_json TEXT NOT NULL,
+    hard_constraint_reason TEXT NOT NULL,
+    preference TEXT,
+    preference_reason TEXT NOT NULL,
     relevance TEXT NOT NULL,
     evidence_json TEXT NOT NULL
 );
 ```
 
 `listing_status` and `deadline_status` follow glossary values (Open/Closed; Upcoming/Passed/Unknown).
-`gap_tolerance` is `None` / `Semester` / `Year` / `Any`, or SQL NULL when unset.
 `list_fingerprint` supports incremental Crawl skip when list row facts are unchanged.
 `detail_json` stores structured detail fields (including Evidence-rich text) from the detail page.
-`match_assessments` rows are rebuilt for new/changed Crawl detail and for Open postings when Master CV or Preferences change; absence means Pending.
+`preference` is Strong/Mixed/Weak, or SQL NULL for unknown Preference.
+`candidate_fingerprints` detects Master CV / HC / Preferences content or path-clear changes (ADR-0014).
+`match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending); Crawl new/detail-changed postings clear that posting’s assessment. Re-judge is opportunistic via `rejudge_pending_assessments()` (catalog UI calls it on load).
 Preparation Packet tables arrive in a later slice (`has_preparation_packet` / Stale remain false for now).
 
 ## Package layout
@@ -75,11 +78,11 @@ src/job_finding_assistant/
   assistant.py              # Assistant + AssessmentSummary + CrawlOutcome
   crawl_filters.py          # CrawlFilters (+ Closing-capable check)
   crawl_pacer.py            # RandomCrawlPacer / NoOpCrawlPacer delay ranges
-  hard_constraints.py       # Language / location / Gap Tolerance rules
-  match_assessment.py       # MatchAssessment, EvidencePair, JudgeResult
+  constraint_files.py       # Read-only HC/Preferences file + fingerprint helpers
+  constraint_files_store.py # DiskConstraintFilesStore (paths; read-only on files)
+  match_assessment.py       # MatchAssessment, judgments, EvidencePair
   job_board.py              # JobListEntry, JobPostingDetail, AuthLostError, CrawlOutcome
   playwright_job_board.py   # Live Playwright JobBoardSession
-  preferences.py            # Preferences, LanguagePreference, GapTolerance
   candidate_snapshot.py     # CandidateSnapshot + LaTeX section parse
   master_cv_store.py        # DiskMasterCvStore (path state; read-only Master CV)
   catalog_store.py          # SQLite CatalogStore
@@ -88,15 +91,15 @@ src/job_finding_assistant/
   web/
     app.py                  # create_app(assistant), main()
     templates/              # Jinja pages (catalog + candidate + crawl)
-tests/                      # Behavior through Assistant (+ UI→Assistant; HC pure rules)
+tests/                      # Behavior through Assistant (+ UI→Assistant)
 ```
 
-## Candidate / Preferences / Crawl / Assessment UI
+## Candidate / Crawl / Assessment UI
 
-- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare gate)
-- `/candidate` — set Master CV path, inspect Candidate Snapshot, edit Preferences
+- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare gate; opportunistic rejudge on load)
+- `/candidate` — set Master CV / Hard Constraints / Preferences paths; inspect Candidate Snapshot; path/read errors
 - `/crawl` — User-Attended Login, Crawl Filters, Incremental Crawl / Full Refresh
-- POST `/candidate/master-cv`, POST `/candidate/preferences` — mutate only via Assistant
+- POST `/candidate/master-cv`, `/candidate/hard-constraints`, `/candidate/preferences` (+ clear) — mutate only via Assistant
 - POST `/crawl/login`, POST `/crawl/filters`, POST `/crawl/run` — mutate only via Assistant
 
 ## How to run
@@ -112,16 +115,11 @@ Live Crawls intentionally wait randomly between Job Board list pages and detail 
 
 ## Decided next (docs ahead of code)
 
-Not implemented yet. Product intent in `CONTEXT.md` and ADRs 0005–0014:
+Not implemented yet. Product intent in `CONTEXT.md` and ADRs 0007, 0009, 0011–0013 (and remaining YAML migration):
 
-- Replace structured `preferences` + `hard_constraints` rules with two read-only disk paths (Hard Constraints file, Preferences file) and LLM Hard Constraint / Preference / Relevance judgments.
-- Assessment Summary shows Preference and Relevance; sort Preference then Relevance (Deadline Unknown last among deadline ties); Pending/Prepare rules per ADR-0006 / ADR-0013 (HC is a non-blocking signal; Override removed).
-- Preference and Relevance judge rubrics (input isolation, band criteria, Evidence/reason outputs) are documented in ADR-0008; still unimplemented in `LlmJudge`.
-- Hard Constraint judge rubric (isolation, fail/unknown/pass precedence, conservative inference) is documented in ADR-0010; still unimplemented in `LlmJudge` (code still uses rule-based `hard_constraints`).
-- `match_assessments` gains a Preference band (and HC becomes freeform-reason oriented rather than three named rule results).
 - Master CV becomes RenderCV YAML (Python ≥3.12); Candidate Snapshot from YAML; Tailored CV YAML → RenderCV PDF at prepare; no LaTeX Master CV in v1.
 - Tailored CV formatting rules (reorder-first, pinned section order, omission/rephrase limits) are documented in ADR-0009; still unimplemented in `LlmCvTailor`.
 - Gap Report rules (Prepare-time, missing/partial, non-fictional suggestions, tailor must not fill Missing) are documented in ADR-0011; still unimplemented (no `prepare()` yet).
 - Edit Summary rules (grouped disclosures, Gap Report boundary, best-effort checklist from the tailor) are documented in ADR-0012; still unimplemented (no `prepare()` yet).
-- Prepare flow (gates, confirms, packet contents, tool-managed store, downloads, Delete cascade, Stale, atomic failure) is documented in ADR-0013; still unimplemented (no `prepare()` yet).
-- Assessment freshness (ADR-0014): content fingerprint (not path-only); on Master CV / HC / Preferences change mark **all** assessments Pending and packets Stale, then async re-judge; Crawl new/detail-changed → Pending (Crawl success ≠ assessments done); Crawl does not Stale packets; unreadable-file and judge-failure Pending rules — still unimplemented.
+- Prepare flow (gates, confirms, packet contents, tool-managed store, downloads, Delete cascade, Stale, atomic failure) is documented in ADR-0013; still unimplemented (no `prepare()` yet). Stale marking on candidate-file change is reserved for when packets exist.
+- Live `LlmJudge` provider (not Fake) implementing ADR-0008 / ADR-0010 rubrics end-to-end.
