@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
-from job_finding_assistant.candidate_snapshot import CandidateSnapshot, build_candidate_snapshot
+from job_finding_assistant.candidate_snapshot import (
+    CandidateSnapshot,
+    InvalidMasterCvError,
+    build_candidate_snapshot,
+)
 from job_finding_assistant.constraint_files import ConstraintFileRead, read_constraint_file
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
@@ -131,11 +135,16 @@ class FakeMasterCvStore:
         if self._path is None:
             self._snapshot = None
             return
-        latex_path = Path(self._path)
-        if not latex_path.is_file():
+        yaml_path = Path(self._path)
+        if not yaml_path.is_file():
             self._snapshot = None
             return
-        self._snapshot = build_candidate_snapshot(latex_path.read_text(encoding="utf-8"))
+        try:
+            self._snapshot = build_candidate_snapshot(
+                yaml_path.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, InvalidMasterCvError):
+            self._snapshot = None
 
 
 class FakeConstraintFilesStore:

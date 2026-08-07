@@ -7,7 +7,7 @@ Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 
 - **UI:** FastAPI + Jinja, single-user local server (`job_finding_assistant.web.app`).
 - **Application seam:** `Assistant` — the only surface the UI and automated tests call.
 - **Persistence:** SQLite via `CatalogStore` (Job Postings, Crawl Filters, Match Assessments, candidate-file fingerprints; later Preparation Packet metadata).
-- **Master CV:** LaTeX on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the `.tex` file).
+- **Master CV:** RenderCV YAML on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the YAML file). Python ≥3.12; `rendercv` dependency present (PDF rendering reserved for Prepare).
 - **Hard Constraints / Preferences:** plain-text file paths via `DiskConstraintFilesStore` (tool reads only; empty/missing → unknown without judge).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests.
 - **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
@@ -83,8 +83,8 @@ src/job_finding_assistant/
   match_assessment.py       # MatchAssessment, judgments, EvidencePair
   job_board.py              # JobListEntry, JobPostingDetail, AuthLostError, CrawlOutcome
   playwright_job_board.py   # Live Playwright JobBoardSession
-  candidate_snapshot.py     # CandidateSnapshot + LaTeX section parse
-  master_cv_store.py        # DiskMasterCvStore (path state; read-only Master CV)
+  candidate_snapshot.py     # CandidateSnapshot + RenderCV YAML section parse
+  master_cv_store.py        # DiskMasterCvStore (path state; read-only Master CV YAML)
   catalog_store.py          # SQLite CatalogStore
   ports.py                  # Protocols for adapters
   fakes.py                  # Test / local-shell fakes
@@ -115,10 +115,9 @@ Live Crawls intentionally wait randomly between Job Board list pages and detail 
 
 ## Decided next (docs ahead of code)
 
-Not implemented yet. Product intent in `CONTEXT.md` and ADRs 0007, 0009, 0011–0013 (and remaining YAML migration):
+Not implemented yet. Product intent in `CONTEXT.md` and ADRs 0009, 0011–0013:
 
-- Master CV becomes RenderCV YAML (Python ≥3.12); Candidate Snapshot from YAML; Tailored CV YAML → RenderCV PDF at prepare; no LaTeX Master CV in v1.
-- Tailored CV formatting rules (reorder-first, pinned section order, omission/rephrase limits) are documented in ADR-0009; still unimplemented in `LlmCvTailor`.
+- Tailored CV YAML → RenderCV PDF at Prepare; Tailored CV formatting rules (reorder-first, pinned section order, omission/rephrase limits) are documented in ADR-0009; still unimplemented in `LlmCvTailor`.
 - Gap Report rules (Prepare-time, missing/partial, non-fictional suggestions, tailor must not fill Missing) are documented in ADR-0011; still unimplemented (no `prepare()` yet).
 - Edit Summary rules (grouped disclosures, Gap Report boundary, best-effort checklist from the tailor) are documented in ADR-0012; still unimplemented (no `prepare()` yet).
 - Prepare flow (gates, confirms, packet contents, tool-managed store, downloads, Delete cascade, Stale, atomic failure) is documented in ADR-0013; still unimplemented (no `prepare()` yet). Stale marking on candidate-file change is reserved for when packets exist.

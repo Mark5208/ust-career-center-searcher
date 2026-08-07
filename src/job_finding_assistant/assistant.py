@@ -121,7 +121,7 @@ class Assistant:
         return self._catalog_store.get_match_assessment(job_posting_id)
 
     def set_master_cv_path(self, path: str) -> None:
-        """Point at a Master CV LaTeX file; never overwrites that file."""
+        """Point at a Master CV RenderCV YAML file; never overwrites that file."""
         self._master_cv.set_master_cv_path(path)
         self.refresh_candidate_file_state()
 

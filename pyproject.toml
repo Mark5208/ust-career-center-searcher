@@ -6,12 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "job-finding-assistant"
 version = "0.1.0"
 description = "Personal local Job Finding Assistant for the HKUST Career Center Job Board"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115.0",
   "jinja2>=3.1.0",
   "playwright>=1.49.0",
   "python-multipart>=0.0.9",
+  "PyYAML>=6.0",
+  "rendercv>=2.8",
   "uvicorn[standard]>=0.32.0",
 ]
 
@@ -21,10 +23,11 @@ dev = [
   "mypy>=1.13.0",
   "pytest>=8.0.0",
   "ruff>=0.8.0",
+  "types-PyYAML>=6.0",
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 packages = ["job_finding_assistant"]
 
@@ -43,4 +46,4 @@ pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"

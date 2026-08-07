@@ -43,13 +43,13 @@ class CrawlPacer(Protocol):
 
 @runtime_checkable
 class MasterCvStore(Protocol):
-    """Reads Master CV LaTeX and rebuilds the Candidate Snapshot."""
+    """Reads Master CV RenderCV YAML and rebuilds the Candidate Snapshot."""
 
     def master_cv_path(self) -> str | None:
         """Return the configured Master CV path, if any."""
 
     def set_master_cv_path(self, path: str) -> None:
-        """Set the Master CV LaTeX path without modifying that file."""
+        """Set the Master CV YAML path without modifying that file."""
 
     def candidate_snapshot(self) -> CandidateSnapshot | None:
         """Return the Candidate Snapshot rebuilt from the Master CV, if any."""

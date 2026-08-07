@@ -214,7 +214,7 @@ def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -
 
 def test_candidate_page_calls_assistant_for_snapshot_and_constraint_paths() -> None:
     assistant = _RecordingAssistant()
-    assistant.master_cv_path = "/tmp/master.tex"
+    assistant.master_cv_path = "/tmp/master_CV.yaml"
     assistant.hard_constraints_path = "/tmp/hard.txt"
     assistant.preferences_path = "/tmp/prefs.txt"
     assistant.snapshot = CandidateSnapshot(
@@ -222,7 +222,7 @@ def test_candidate_page_calls_assistant_for_snapshot_and_constraint_paths() -> N
         education=["BEng Computer Science, HKUST, 2024"],
         experience=["Software Intern at Acme Corp"],
         projects=["Campus Event Finder"],
-        skills_tools=["Python, LaTeX, SQLite"],
+        skills_tools=["Python, YAML, SQLite"],
     )
     client = TestClient(create_app(assistant))
 
@@ -230,19 +230,27 @@ def test_candidate_page_calls_assistant_for_snapshot_and_constraint_paths() -> N
 
     assert response.status_code == 200
     assert "Candidate Snapshot" in response.text
+    assert "Master CV YAML path" in response.text
     assert "Alice Example, alice@example.com" in response.text
     assert "Hard Constraints file" in response.text
     assert "Preferences file" in response.text
     assert "/tmp/hard.txt" in response.text
     assert "/tmp/prefs.txt" in response.text
     assert 'action="/crawl/filters"' not in response.text
+    assert "LaTeX" not in response.text
 
 
 def test_candidate_page_posts_paths_through_assistant(tmp_path: Path) -> None:
-    master_cv_path = tmp_path / "master.tex"
+    master_cv_path = tmp_path / "master_CV.yaml"
     master_cv_path.write_text(
-        r"\documentclass{article}\begin{document}"
-        r"\section{Skills}Python\end{document}",
+        """\
+cv:
+  name: Alice
+  sections:
+    skills:
+      - label: Languages
+        details: Python
+""",
         encoding="utf-8",
     )
     hc_path = tmp_path / "hard.txt"
@@ -281,9 +289,7 @@ def test_candidate_page_posts_paths_through_assistant(tmp_path: Path) -> None:
     assert assistant.get_master_cv_path() == str(master_cv_path.resolve())
     assert assistant.get_hard_constraints_path() == str(hc_path.resolve())
     assert assistant.get_preferences_path() == str(prefs_path.resolve())
-    assert master_cv_path.read_text(encoding="utf-8").endswith(
-        r"\section{Skills}Python\end{document}"
-    )
+    assert "details: Python" in master_cv_path.read_text(encoding="utf-8")
     assert hc_path.read_text(encoding="utf-8") == "Hong Kong only\n"
     page = client.get("/candidate")
     assert "Python" in page.text
