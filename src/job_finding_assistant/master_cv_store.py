@@ -1,10 +1,14 @@
-"""Disk-backed Master CV path and Candidate Snapshot rebuild (read-only on the .tex file)."""
+"""Disk-backed Master CV path and Candidate Snapshot rebuild (read-only on the YAML file)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from job_finding_assistant.candidate_snapshot import CandidateSnapshot, build_candidate_snapshot
+from job_finding_assistant.candidate_snapshot import (
+    CandidateSnapshot,
+    InvalidMasterCvError,
+    build_candidate_snapshot,
+)
 
 
 class DiskMasterCvStore:
@@ -46,11 +50,11 @@ class DiskMasterCvStore:
     def _rebuild_if_master_cv_changed(self) -> None:
         if self._path is None:
             return
-        latex_path = Path(self._path)
-        if not latex_path.is_file():
+        yaml_path = Path(self._path)
+        if not yaml_path.is_file():
             self._clear_snapshot()
             return
-        mtime_ns = latex_path.stat().st_mtime_ns
+        mtime_ns = yaml_path.stat().st_mtime_ns
         if self._snapshot_mtime_ns != mtime_ns:
             self._rebuild_snapshot()
 
@@ -58,10 +62,13 @@ class DiskMasterCvStore:
         if self._path is None:
             self._clear_snapshot()
             return
-        latex_path = Path(self._path)
-        if not latex_path.is_file():
+        yaml_path = Path(self._path)
+        if not yaml_path.is_file():
             self._clear_snapshot()
             return
-        latex = latex_path.read_text(encoding="utf-8")
-        self._snapshot = build_candidate_snapshot(latex)
-        self._snapshot_mtime_ns = latex_path.stat().st_mtime_ns
+        try:
+            text = yaml_path.read_text(encoding="utf-8")
+            self._snapshot = build_candidate_snapshot(text)
+            self._snapshot_mtime_ns = yaml_path.stat().st_mtime_ns
+        except (OSError, UnicodeError, InvalidMasterCvError):
+            self._clear_snapshot()

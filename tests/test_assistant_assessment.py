@@ -15,13 +15,17 @@ from job_finding_assistant.fakes import (
 from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
 from job_finding_assistant.match_assessment import EvidencePair, MatchAssessment
 
-_SAMPLE_CV = (
-    r"\documentclass{article}\begin{document}"
-    r"\section{Experience}Platform engineer\end{document}"
-)
+_SAMPLE_CV = """\
+cv:
+  name: Test Candidate
+  sections:
+    experience:
+      - company: Example
+        position: Platform engineer
+"""
 
 
-def _write_cv(tmp_path: Path, name: str = "master.tex", body: str = _SAMPLE_CV) -> Path:
+def _write_cv(tmp_path: Path, name: str = "master_CV.yaml", body: str = _SAMPLE_CV) -> Path:
     path = tmp_path / name
     path.write_text(body, encoding="utf-8")
     return path
@@ -243,6 +247,29 @@ def test_fingerprint_change_marks_all_assessments_pending(tmp_path: Path) -> Non
     assert assistant.list_assessment_summaries()[0].preference == "Strong"
 
 
+def test_master_cv_yaml_content_change_marks_all_assessments_pending(
+    tmp_path: Path,
+) -> None:
+    cv_path = _write_cv(tmp_path)
+    assistant, _ = _crawl_with_master_cv(tmp_path)
+    assistant.run_crawl()
+    assistant.rejudge_pending_assessments()
+    assert assistant.list_assessment_summaries()[0].pending is False
+
+    cv_path.write_text(
+        _SAMPLE_CV.replace("Platform engineer", "Staff platform engineer"),
+        encoding="utf-8",
+    )
+    assistant.refresh_candidate_file_state()
+
+    assert assistant.list_assessment_summaries()[0].pending is True
+    assert "Staff platform engineer" in (
+        assistant.get_candidate_snapshot().experience[0]
+        if assistant.get_candidate_snapshot()
+        else ""
+    )
+
+
 def test_path_clear_marks_all_assessments_pending(tmp_path: Path) -> None:
     prefs_path = tmp_path / "prefs.txt"
     prefs_path.write_text("Prefer remote\n", encoding="utf-8")
@@ -262,6 +289,37 @@ def test_path_clear_marks_all_assessments_pending(tmp_path: Path) -> None:
     assert assistant.list_assessment_summaries()[0].pending is True
 
 
+def test_invalid_master_cv_yaml_keeps_relevance_pending_with_error(
+    tmp_path: Path,
+) -> None:
+    entry, detail = _open_posting()
+    job_board = FakeJobBoardSession(
+        authenticated=True,
+        list_entries=[entry],
+        details={detail.id: detail},
+    )
+    broken = tmp_path / "broken_CV.yaml"
+    broken.write_text("cv: [\n  not: valid\n", encoding="utf-8")
+    assistant = _assistant(
+        tmp_path,
+        job_board=job_board,
+        master_cv=FakeMasterCvStore(),
+        llm_judge=FakeLlmJudge(relevance="Strong"),
+    )
+    assistant.set_master_cv_path(str(broken))
+    assistant.run_crawl()
+    assistant.rejudge_pending_assessments()
+
+    summaries = assistant.list_assessment_summaries()
+    assert len(summaries) == 1
+    assert summaries[0].pending is True
+    assert assistant.can_prepare(summaries[0].job_posting_id) is False
+    assert assistant.get_candidate_snapshot() is None
+    errors = assistant.get_candidate_file_errors()
+    assert any("Master CV" in error for error in errors)
+    assert broken.read_text(encoding="utf-8").startswith("cv: [")
+
+
 def test_unreadable_master_cv_keeps_relevance_pending_with_error(tmp_path: Path) -> None:
     entry, detail = _open_posting()
     job_board = FakeJobBoardSession(
@@ -269,7 +327,7 @@ def test_unreadable_master_cv_keeps_relevance_pending_with_error(tmp_path: Path)
         list_entries=[entry],
         details={detail.id: detail},
     )
-    missing = tmp_path / "missing.tex"
+    missing = tmp_path / "missing_CV.yaml"
     assistant = _assistant(
         tmp_path,
         job_board=job_board,

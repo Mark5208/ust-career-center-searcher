@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0014`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0006, 0008, 0010, and 0014 assessment freshness are implemented through `Assistant` (freeform HC/Preferences paths, three LLM signals, Pending-first rejudge). Master CV remains LaTeX until the YAML ticket. Prepare / Gap Report / Edit Summary / packets (ADRs 0007, 0009, 0011–0013) are still ahead of code.
+**Docs vs code:** ADRs 0005–0008, 0010, 0014 assessment freshness, and ADR-0007 Master CV YAML / Snapshot are implemented through `Assistant`. Prepare / Gap Report / Edit Summary / packets / Tailored PDF (ADRs 0009, 0011–0013) are still ahead of code.
 
 ## Primary seam
 
@@ -44,10 +44,10 @@ Implemented at the `LlmJudge.judge_hard_constraint` call site (Fake in tests; li
 
 Preference and Relevance call sites enforce input isolation (`judge_preference` never sees CV; `judge_relevance` never sees Preferences). Band criteria live in the live judge prompt; Fake scripts bands for tests.
 
-## Decided Master CV format (ADR-0007)
+## Decided Master CV format (ADR-0007) — as shipped in code
 
-- Master CV and Tailored CV are RenderCV YAML; tool never overwrites the Master CV.
-- Tailored YAML may be rendered to PDF via RenderCV; ADR-0003 no-fabrication rules still apply with YAML structure preservation.
+- Master CV is RenderCV YAML on disk; tool never overwrites it; Candidate Snapshot rebuilds from YAML.
+- Tailored YAML may be rendered to PDF via RenderCV at Prepare (still ahead); ADR-0003 no-fabrication rules still apply with YAML structure preservation.
 - Python ≥3.12 required for RenderCV; LaTeX Master CV not retained for v1.
 
 ### Tailored CV formatting (ADR-0009)
@@ -96,16 +96,17 @@ Docs ahead of `prepare()` implementation:
 
 Deliver a runnable local shell: FastAPI + Jinja, SQLite `CatalogStore` (minimal schema), fakeable ports, and an empty-catalog Assessment Summary path proven through `Assistant` without Playwright or a real LLM.
 
-## Master CV / Snapshot / constraint files slice (issue #3 + #11 migration)
+## Master CV / Snapshot / constraint files slice (issues #3, #11, #12)
 
 Through `Assistant` and `/candidate` UI:
 
-- Set/update Master CV LaTeX path; never overwrite the Master CV file (`DiskMasterCvStore` reads only).
-- Rebuild inspectable Candidate Snapshot from Master CV sections (contact, education, experience, projects, skills/tools as written); not hand-editable.
+- Set/update Master CV RenderCV YAML path; never overwrite the Master CV file (`DiskMasterCvStore` reads only).
+- Rebuild inspectable Candidate Snapshot from YAML (contact from header fields; education / experience / projects / skills/tools sections as written); not hand-editable.
+- Invalid or unreadable YAML → no Snapshot, Relevance stays Pending, clear path/content error (ADR-0014).
 - Set Hard Constraints and Preferences plain-text file paths (`DiskConstraintFilesStore`); tool reads only; empty/missing → unknown without judge.
 - Structured languages / locations / Gap Tolerance Preferences form removed (ADR-0005).
-
-Target after YAML ticket: Master CV YAML path; Snapshot from RenderCV YAML.
+- LaTeX Master CV is not a supported v1 format.
+- Python ≥3.12; `rendercv` + PyYAML dependencies (PDF rendering deferred to Prepare).
 
 ## Crawl slice (issue #4)
 
@@ -128,4 +129,4 @@ Through `Assistant` and `/` Assessment Summary UI:
 - Hard Constraint / Preference / Relevance via fakeable `LlmJudge` with input isolation; empty HC/Prefs → unknown without judge; Prepare unavailable only while Pending (HC fail does not block).
 - Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic `rejudge_pending_assessments`.
 
-Prepare / packets / Delete / YAML Master CV remain later tickets (#12–#14).
+Prepare / packets / Delete remain later tickets (#13–#14).

@@ -1,4 +1,4 @@
-"""Assistant seam: Master CV path, Candidate Snapshot, freeform constraint file paths."""
+"""Assistant seam: Master CV YAML path, Candidate Snapshot, freeform constraint file paths."""
 
 from pathlib import Path
 
@@ -11,6 +11,29 @@ from job_finding_assistant.fakes import (
     FakeLlmJudge,
 )
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
+
+_SAMPLE_MASTER_CV = """\
+cv:
+  name: Alice Example
+  email: alice@example.com
+  sections:
+    education:
+      - institution: HKUST
+        area: Computer Science
+        degree: BEng
+        end_date: "2024"
+    experience:
+      - company: Acme Corp
+        position: Software Intern
+        highlights:
+          - Built internal tools
+    projects:
+      - name: Campus Event Finder
+        summary: Campus event discovery app
+    skills:
+      - label: Languages
+        details: Python, YAML, SQLite
+"""
 
 
 def _assistant(
@@ -31,11 +54,8 @@ def _assistant(
 
 
 def test_assistant_sets_master_cv_path_without_overwriting_file(tmp_path: Path) -> None:
-    master_cv_path = tmp_path / "master.tex"
-    original = (
-        r"\documentclass{article}"
-        r"\begin{document}Original Master CV\end{document}"
-    )
+    master_cv_path = tmp_path / "master_CV.yaml"
+    original = "cv:\n  name: Original Master CV\n"
     master_cv_path.write_text(original, encoding="utf-8")
     assistant = _assistant(tmp_path)
 
@@ -45,29 +65,8 @@ def test_assistant_sets_master_cv_path_without_overwriting_file(tmp_path: Path) 
     assert master_cv_path.read_text(encoding="utf-8") == original
 
 
-_SAMPLE_MASTER_CV = r"""
-\documentclass{article}
-\begin{document}
-\section{Contact}
-Alice Example, alice@example.com
-
-\section{Education}
-BEng Computer Science, HKUST, 2024
-
-\section{Experience}
-Software Intern at Acme Corp
-
-\section{Projects}
-Campus Event Finder
-
-\section{Skills}
-Python, LaTeX, SQLite
-\end{document}
-"""
-
-
 def test_assistant_builds_candidate_snapshot_from_master_cv(tmp_path: Path) -> None:
-    master_cv_path = tmp_path / "master.tex"
+    master_cv_path = tmp_path / "master_CV.yaml"
     master_cv_path.write_text(_SAMPLE_MASTER_CV, encoding="utf-8")
     assistant = _assistant(tmp_path)
 
@@ -76,24 +75,27 @@ def test_assistant_builds_candidate_snapshot_from_master_cv(tmp_path: Path) -> N
 
     assert snapshot is not None
     assert snapshot.contact == "Alice Example, alice@example.com"
-    assert snapshot.education == ["BEng Computer Science, HKUST, 2024"]
-    assert snapshot.experience == ["Software Intern at Acme Corp"]
-    assert snapshot.projects == ["Campus Event Finder"]
-    assert snapshot.skills_tools == ["Python, LaTeX, SQLite"]
+    assert snapshot.education == ["BEng, Computer Science, HKUST, 2024"]
+    assert snapshot.experience == [
+        "Software Intern at Acme Corp\n- Built internal tools"
+    ]
+    assert snapshot.projects == ["Campus Event Finder: Campus event discovery app"]
+    assert snapshot.skills_tools == ["Languages: Python, YAML, SQLite"]
 
 
 def test_assistant_keeps_skills_and_tools_sections_as_written(tmp_path: Path) -> None:
-    master_cv_path = tmp_path / "master.tex"
+    master_cv_path = tmp_path / "master_CV.yaml"
     master_cv_path.write_text(
-        r"""
-\documentclass{article}
-\begin{document}
-\section{Skills}
-Python, LaTeX
-
-\section{Tools}
-SQLite, Git
-\end{document}
+        """\
+cv:
+  name: Alice Example
+  sections:
+    skills:
+      - label: Languages
+        details: Python, YAML
+    tools:
+      - label: Stack
+        details: SQLite, Git
 """,
         encoding="utf-8",
     )
@@ -103,27 +105,40 @@ SQLite, Git
     snapshot = assistant.get_candidate_snapshot()
 
     assert snapshot is not None
-    assert snapshot.skills_tools == ["Python, LaTeX", "SQLite, Git"]
+    assert snapshot.skills_tools == ["Languages: Python, YAML", "Stack: SQLite, Git"]
 
 
 def test_assistant_rebuilds_candidate_snapshot_when_master_cv_changes(
     tmp_path: Path,
 ) -> None:
-    master_cv_path = tmp_path / "master.tex"
+    master_cv_path = tmp_path / "master_CV.yaml"
     master_cv_path.write_text(_SAMPLE_MASTER_CV, encoding="utf-8")
     assistant = _assistant(tmp_path)
     assistant.set_master_cv_path(str(master_cv_path))
     assert assistant.get_candidate_snapshot() is not None
-    assert assistant.get_candidate_snapshot().skills_tools == ["Python, LaTeX, SQLite"]
+    assert assistant.get_candidate_snapshot().skills_tools == [
+        "Languages: Python, YAML, SQLite"
+    ]
 
-    updated = _SAMPLE_MASTER_CV.replace("Python, LaTeX, SQLite", "Rust, Go")
+    updated = _SAMPLE_MASTER_CV.replace("Python, YAML, SQLite", "Rust, Go")
     master_cv_path.write_text(updated, encoding="utf-8")
 
     snapshot = assistant.get_candidate_snapshot()
 
     assert snapshot is not None
-    assert snapshot.skills_tools == ["Rust, Go"]
+    assert snapshot.skills_tools == ["Languages: Rust, Go"]
     assert master_cv_path.read_text(encoding="utf-8") == updated
+
+
+def test_invalid_master_cv_yaml_yields_no_snapshot(tmp_path: Path) -> None:
+    master_cv_path = tmp_path / "broken_CV.yaml"
+    master_cv_path.write_text("cv: [\n  not: valid\n", encoding="utf-8")
+    assistant = _assistant(tmp_path)
+
+    assistant.set_master_cv_path(str(master_cv_path))
+
+    assert assistant.get_candidate_snapshot() is None
+    assert master_cv_path.read_text(encoding="utf-8").startswith("cv: [")
 
 
 def test_assistant_sets_constraint_file_paths_without_overwriting(tmp_path: Path) -> None:
