@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Preparation Packet — Job Finding Assistant</title>
+    <style>
+      :root {
+        --ink: #1a2332;
+        --muted: #5a6570;
+        --paper: #f3f6f8;
+        --line: #d5dde3;
+        --warn: #8a5a12;
+        --warn-bg: #f7efd9;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse at top left, #e8eef3 0%, transparent 55%),
+          linear-gradient(180deg, #dfe8ee 0%, var(--paper) 40%, #eef2f4 100%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 48rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+      }
+      h1 {
+        font-size: 2rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.35rem;
+      }
+      h2 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin: 2rem 0 0.75rem;
+      }
+      p, li {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .banner {
+        margin: 1rem 0;
+        padding: 0.85rem 1rem;
+        background: var(--warn-bg);
+        color: var(--warn);
+        border: 1px solid #e2d2a8;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+      .downloads {
+        margin: 1rem 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+      }
+      .downloads a {
+        color: var(--ink);
+      }
+      .gap-item, .edit-group {
+        margin: 0 0 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--line);
+      }
+      .gap-item strong, .edit-group strong {
+        color: var(--ink);
+      }
+      nav a {
+        color: #5a6570;
+        text-decoration: none;
+        margin-right: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href="/">Assessment Summary</a>
+        <a href="/candidate">Candidate</a>
+        <a href="/crawl">Crawl</a>
+      </nav>
+      <h1>Preparation Packet</h1>
+      <p class="meta">{{ title }} — {{ employer }}</p>
+      {% if packet.stale %}
+      <p class="banner">
+        Stale — Master CV, Hard Constraints, or Preferences changed after this packet
+        was prepared. Artifacts remain readable; re-Prepare deliberately to refresh.
+      </p>
+      {% endif %}
+      {% if packet.pdf_missing %}
+      <p class="banner">PDF is missing for this packet (YAML, Gap Report, and Edit Summary were kept).</p>
+      {% endif %}
+
+      <h2>Gap Report</h2>
+      {% if packet.gap_report.items %}
+        {% for item in packet.gap_report.items %}
+        <div class="gap-item">
+          <p><strong>{{ item.requirement }}</strong> ({{ item.status }})</p>
+          <p>Evidence: {{ item.evidence }}</p>
+          <p>Suggestion: {{ item.suggestion }}</p>
+        </div>
+        {% endfor %}
+      {% else %}
+      <p>{{ packet.gap_report.note }}</p>
+      {% endif %}
+
+      <h2>Edit Summary</h2>
+      {% if packet.edit_summary.has_material_edits() %}
+        {% for heading, items in packet.edit_summary.grouped_sections() %}
+        <div class="edit-group">
+          <p><strong>{{ heading }}</strong></p>
+          <ul>
+            {% for line in items %}
+            <li>{{ line }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endfor %}
+      {% else %}
+      <p>No material edits.</p>
+      {% endif %}
+
+      <h2>Tailored CV / PDF</h2>
+      <div class="downloads">
+        <a href="/jobs/{{ job_posting_id }}/packet/yaml">Download Tailored YAML</a>
+        {% if not packet.pdf_missing %}
+        <a href="/jobs/{{ job_posting_id }}/packet/pdf">Download Tailored PDF</a>
+        {% endif %}
+      </div>
+
+      <h2>Current Match Assessment</h2>
+      {% if match_assessment %}
+      <p class="meta">
+        Hard Constraint: {{ match_assessment.hard_constraint_outcome }}
+        ({{ match_assessment.hard_constraint_reason }}) ·
+        Preference: {{ match_assessment.preference or "unknown" }} ·
+        Relevance: {{ match_assessment.relevance }}
+      </p>
+      {% else %}
+      <p class="meta">Pending — assessments refresh after candidate-file or Crawl changes.</p>
+      {% endif %}
+    </main>
+  </body>
+</html>

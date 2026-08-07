@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Literal
 
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
@@ -13,6 +15,8 @@ from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
 from job_finding_assistant.match_assessment import MatchAssessment
+from job_finding_assistant.packet_store import PacketStore
+from job_finding_assistant.pdf_renderer import PdfRenderError, RenderCvPdfRenderer
 from job_finding_assistant.ports import (
     ConstraintFilesStore,
     CrawlPacer,
@@ -20,14 +24,45 @@ from job_finding_assistant.ports import (
     LlmCvTailor,
     LlmJudge,
     MasterCvStore,
+    PdfRenderer,
 )
+from job_finding_assistant.preparation_packet import PreparationPacket
 
 __all__ = [
     "AssessmentSummary",
     "Assistant",
     "CrawlFilters",
     "CrawlOutcome",
+    "PreparationPacketView",
+    "PrepareBlockedError",
+    "PrepareFailedError",
+    "PrepareNeedsConfirm",
 ]
+
+
+class PrepareBlockedError(Exception):
+    """Prepare is unavailable (Pending Match Assessment)."""
+
+
+class PrepareNeedsConfirm(Exception):
+    """Prepare requires an explicit confirm before running."""
+
+    def __init__(self, kind: Literal["hard_constraint_fail", "overwrite"], reason: str) -> None:
+        super().__init__(reason)
+        self.kind = kind
+        self.reason = reason
+
+
+class PrepareFailedError(Exception):
+    """Tailor/LLM failed mid-run; prior packet (if any) was left untouched."""
+
+
+@dataclass(frozen=True)
+class PreparationPacketView:
+    """Packet artifacts plus the current Match Assessment (not frozen into the packet)."""
+
+    packet: PreparationPacket
+    match_assessment: MatchAssessment | None
 
 
 @dataclass(frozen=True)
@@ -65,6 +100,8 @@ class Assistant:
         llm_cv_tailor: LlmCvTailor,
         constraint_files: ConstraintFilesStore,
         crawl_pacer: CrawlPacer | None = None,
+        packet_store_dir: Path | None = None,
+        pdf_renderer: PdfRenderer | None = None,
     ) -> None:
         self._catalog_store = catalog_store
         self._job_board = job_board
@@ -74,6 +111,9 @@ class Assistant:
         self._constraint_files = constraint_files
         self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
         self._candidate_file_errors: list[str] = []
+        store_root = packet_store_dir or catalog_store.db_path.parent / "packets"
+        self._packet_store = PacketStore(store_root)
+        self._pdf_renderer: PdfRenderer = pdf_renderer or RenderCvPdfRenderer()
 
     def list_assessment_summaries(
         self,
@@ -83,23 +123,26 @@ class Assistant:
     ) -> list[AssessmentSummary]:
         """Return Assessment Summaries with default filter/sort (glossary)."""
         self.refresh_candidate_file_state()
-        summaries = [
-            AssessmentSummary(
-                job_posting_id=row["id"] or "",
-                title=row["title"] or "",
-                employer=row["employer"] or "",
-                listing_status=row["listing_status"] or "Open",
-                deadline_status=row["deadline_status"] or "Unknown",
-                pending=row.get("relevance") is None,
-                hard_constraint_outcome=row.get("hard_constraint_outcome"),
-                preference=row.get("preference"),
-                relevance=row.get("relevance"),
-                has_preparation_packet=False,
-                preparation_packet_stale=False,
-                application_deadline=row.get("application_deadline"),
+        summaries: list[AssessmentSummary] = []
+        for row in self._catalog_store.list_assessment_summary_rows():
+            job_id = row["id"] or ""
+            packet = self._packet_store.get(job_id)
+            summaries.append(
+                AssessmentSummary(
+                    job_posting_id=job_id,
+                    title=row["title"] or "",
+                    employer=row["employer"] or "",
+                    listing_status=row["listing_status"] or "Open",
+                    deadline_status=row["deadline_status"] or "Unknown",
+                    pending=row.get("relevance") is None,
+                    hard_constraint_outcome=row.get("hard_constraint_outcome"),
+                    preference=row.get("preference"),
+                    relevance=row.get("relevance"),
+                    has_preparation_packet=packet is not None,
+                    preparation_packet_stale=bool(packet and packet.stale),
+                    application_deadline=row.get("application_deadline"),
+                )
             )
-            for row in self._catalog_store.list_assessment_summary_rows()
-        ]
         filtered = [
             summary
             for summary in summaries
@@ -119,6 +162,118 @@ class Assistant:
         """Return the Match Assessment detail, or None when Pending."""
         self.refresh_candidate_file_state()
         return self._catalog_store.get_match_assessment(job_posting_id)
+
+    def prepare(
+        self,
+        job_posting_id: str,
+        *,
+        confirm_hard_constraint_fail: bool = False,
+        confirm_overwrite: bool = False,
+    ) -> PreparationPacket:
+        """Build or overwrite the Preparation Packet for one Job Posting.
+
+        Raises PrepareBlockedError while Pending, PrepareNeedsConfirm for HC fail /
+        re-Prepare overwrite, and PrepareFailedError when the tailor fails mid-run
+        (prior packet left untouched). PDF-only failure still persists the packet.
+        """
+        self.refresh_candidate_file_state()
+        assessment = self._catalog_store.get_match_assessment(job_posting_id)
+        if assessment is None:
+            raise PrepareBlockedError(
+                "Prepare unavailable while Match Assessment is Pending"
+            )
+
+        existing = self._packet_store.get(job_posting_id)
+        if existing is not None and not confirm_overwrite:
+            raise PrepareNeedsConfirm(
+                "overwrite",
+                "Re-Prepare will overwrite the current Preparation Packet",
+            )
+        if (
+            assessment.hard_constraint_outcome == "fail"
+            and not confirm_hard_constraint_fail
+        ):
+            raise PrepareNeedsConfirm(
+                "hard_constraint_fail",
+                assessment.hard_constraint_reason,
+            )
+
+        if not self._llm_cv_tailor.available():
+            raise PrepareFailedError("CV tailor is not available")
+
+        snapshot = self.get_candidate_snapshot()
+        if snapshot is None:
+            raise PrepareFailedError(
+                "Master CV / Candidate Snapshot is required to Prepare"
+            )
+
+        master_path = self._master_cv.master_cv_path()
+        if not master_path:
+            raise PrepareFailedError("Master CV path is not set")
+        try:
+            master_cv_yaml = Path(master_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise PrepareFailedError(f"Master CV unreadable: {exc}") from exc
+
+        posting = self._catalog_store.get_job_posting(job_posting_id)
+        if posting is None or not posting.get("detail_json"):
+            raise PrepareFailedError("Job Posting detail is missing")
+        detail_fields = json.loads(posting["detail_json"] or "{}")
+        job_fields = {
+            **detail_fields,
+            "title": posting.get("title") or "",
+            "employer": posting.get("employer") or "",
+        }
+
+        try:
+            tailor_result = self._llm_cv_tailor.tailor(
+                master_cv_yaml=master_cv_yaml,
+                candidate_snapshot=snapshot,
+                job_detail_fields=job_fields,
+                relevance_evidence=list(assessment.evidence),
+                hard_constraint_outcome=assessment.hard_constraint_outcome,
+                hard_constraint_reason=assessment.hard_constraint_reason,
+            )
+        except Exception as exc:
+            raise PrepareFailedError(f"Tailor failed: {exc}") from exc
+
+        pdf_bytes: bytes | None
+        try:
+            pdf_bytes = self._pdf_renderer.render_pdf(tailor_result.tailored_yaml)
+        except PdfRenderError:
+            pdf_bytes = None
+
+        return self._packet_store.save(
+            job_posting_id,
+            gap_report=tailor_result.gap_report,
+            edit_summary=tailor_result.edit_summary,
+            tailored_yaml=tailor_result.tailored_yaml,
+            pdf_bytes=pdf_bytes,
+            stale=False,
+        )
+
+    def get_preparation_packet(self, job_posting_id: str) -> PreparationPacketView | None:
+        """Return the Preparation Packet with the current Match Assessment, if any."""
+        self.refresh_candidate_file_state()
+        packet = self._packet_store.get(job_posting_id)
+        if packet is None:
+            return None
+        return PreparationPacketView(
+            packet=packet,
+            match_assessment=self._catalog_store.get_match_assessment(job_posting_id),
+        )
+
+    def get_tailored_yaml(self, job_posting_id: str) -> str | None:
+        """Return Tailored CV YAML for download, or None when no packet."""
+        packet = self._packet_store.get(job_posting_id)
+        return packet.tailored_yaml if packet is not None else None
+
+    def get_tailored_pdf(self, job_posting_id: str) -> bytes | None:
+        """Return Tailored PDF bytes for download, or None when missing."""
+        packet = self._packet_store.get(job_posting_id)
+        if packet is None:
+            return None
+        return packet.pdf_bytes
 
     def set_master_cv_path(self, path: str) -> None:
         """Point at a Master CV RenderCV YAML file; never overwrites that file."""
@@ -249,7 +404,8 @@ class Assistant:
         """Detect Master CV / HC / Preferences content or path-clear changes.
 
         On change: rebuild Snapshot (via Master CV store), mark **all** assessments
-        Pending, and record path/read errors. Does not auto-rejudge.
+        Pending, mark Preparation Packets Stale, and record path/read errors.
+        Does not auto-rejudge or auto-regenerate packets.
         """
         errors: list[str] = []
         master_path = self._master_cv.master_cv_path()
@@ -288,6 +444,7 @@ class Assistant:
         had_prior = any(value is not None for value in previous.values())
         if changed and had_prior:
             self._catalog_store.clear_all_match_assessments()
+            self._packet_store.mark_all_stale()
         if changed or not had_prior:
             self._catalog_store.save_candidate_fingerprints(**current)
 

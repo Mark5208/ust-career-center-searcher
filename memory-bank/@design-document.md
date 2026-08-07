@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0014`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0008, 0010, 0014 assessment freshness, and ADR-0007 Master CV YAML / Snapshot are implemented through `Assistant`. Prepare / Gap Report / Edit Summary / packets / Tailored PDF (ADRs 0009, 0011–0013) are still ahead of code.
+**Docs vs code:** ADRs 0005–0014 Prepare/assessment/CV slices through `Assistant` are implemented for Match Assessment, Master CV Snapshot, constraint files, Crawl, and Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale). Delete (ADR-0013 remainder) and live LLM/RenderCV providers remain ahead of production wiring.
 
 ## Primary seam
 
@@ -52,45 +52,37 @@ Preference and Relevance call sites enforce input isolation (`judge_preference` 
 
 ### Tailored CV formatting (ADR-0009)
 
-Docs ahead of `LlmCvTailor` / `prepare()` implementation:
+Implemented at the `LlmCvTailor.tailor` call site (Fake scripts results in tests):
 
 - “Higher on the page” = earlier RenderCV YAML order after render; no pixel layout.
-- Operation priority: reorder → emphasize/rephrase → omit lightly → summary only if already present.
-- Reorder from JD required skills/duties + Relevance Evidence (not Preference); Edit Summary discloses cross-role reorders.
-- Optional `assistant.pinned_section_order` in Master CV; pinned section ranks win; absent → LLM decides; metadata not rendered on PDF.
-- Entry-level pins (individual entries/bullets) are a v1 non-goal; revisit only if section pins prove insufficient.
-- Light omission with timeline honesty; gaps stay in Gap Report; JD vocabulary only when evidenced (no inflation/stuffing).
+- Operation priority and pin rules belong in the live tailor prompt (ADR-0009); Fake returns scripted YAML + Edit Summary.
+- Optional `assistant.pinned_section_order` is stripped before PDF render.
 
 ### Gap Report (ADR-0011)
 
-Docs ahead of `prepare()` implementation:
+Implemented as part of `Assistant.prepare()` via `LlmCvTailor.tailor` (Fake scripts Gap Report items):
 
-- Built only at Prepare; inputs JD + Snapshot/Master CV + Relevance Evidence (+ HC failures when HC failed); not Preferences.
-- Required-first; missing vs partial; fully met omitted; ~5–10 cap; nice-to-haves skipped by default.
-- Suggestions = non-fictional user guidance only; tailor must not fill Missing with fiction.
-- One Prepare: Gap Report then tailor; empty Gap Report OK; no auto gap-closure loop.
+- Built only at Prepare; inputs JD + Snapshot/Master CV + Relevance Evidence (+ HC failures when HC failed); Preferences are not passed to the tailor.
+- Empty Gap Report OK; one Prepare: Gap Report then tailor artifacts then PDF attempt.
 
 ### Edit Summary (ADR-0012)
 
-Docs ahead of `prepare()` / `LlmCvTailor` implementation:
+Implemented as a first-class packet peer from the same tailor pass (Fake scripts grouped disclosures):
 
-- First-class packet peer; review order after Prepare: Gap Report → Edit Summary → Tailored CV / PDF.
-- Same Prepare-pass tailor LLM, checklist-constrained (not a YAML diff); best-effort — Prepare does not fail on incomplete disclosures.
-- Required: exhaustive omissions; section / cross-role reorders; summary rewrites; invalid pin names; material rephrases only.
-- Grouped bullets (omit empty groups) or “No material edits”; human labels; material rephrases as short before → after gist.
-- Never lists JD gaps or Suggestions (Gap Report boundary); no overall bullet cap.
+- Review order after Prepare: Gap Report → Edit Summary → Tailored CV / PDF.
+- Best-effort checklist shape; Prepare does not fail on incomplete disclosures.
 
 ### Prepare flow (ADR-0013)
 
-Docs ahead of `prepare()` implementation:
+Implemented through `Assistant.prepare` / `get_preparation_packet` / downloads:
 
 - Prepare blocked only while Pending; Closed / Deadline Passed allowed; Override removed.
 - HC fail → confirm with reason; re-Prepare → overwrite confirm; otherwise one-click.
 - Success packet: Gap Report + Edit Summary + Tailored YAML + PDF at Prepare; assessment not frozen-copied.
 - PDF-only failure may leave packet without PDF; tailor/LLM mid-run failure is atomic (prior packet untouched).
-- Stale only when Master CV / HC file / Preferences file change (content or path clear per ADR-0014); Stale packets stay readable with banner; Crawl detail does not Stale.
+- Stale only when Master CV / HC file / Preferences file change; Stale packets stay readable with banner; Crawl detail does not Stale.
 - Tool-managed packet store (keyed by Job Posting); download PDF/YAML; Gap Report / Edit Summary UI-only in v1.
-- Delete confirms then hard-removes posting + assessment + packet; no trash/undo.
+- Delete confirms then hard-removes posting + assessment + packet — still ahead (issue #14).
 
 ## Scaffold slice (issue #2)
 
@@ -129,4 +121,4 @@ Through `Assistant` and `/` Assessment Summary UI:
 - Hard Constraint / Preference / Relevance via fakeable `LlmJudge` with input isolation; empty HC/Prefs → unknown without judge; Prepare unavailable only while Pending (HC fail does not block).
 - Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic `rejudge_pending_assessments`.
 
-Prepare / packets / Delete remain later tickets (#13–#14).
+Prepare / packets shipped in #13; Delete remains later ticket (#14).

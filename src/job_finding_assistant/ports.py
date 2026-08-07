@@ -7,10 +7,13 @@ from job_finding_assistant.constraint_files import ConstraintFileRead
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
 from job_finding_assistant.match_assessment import (
+    ConstraintOutcome,
+    EvidencePair,
     HardConstraintJudgment,
     PreferenceJudgment,
     RelevanceJudgment,
 )
+from job_finding_assistant.preparation_packet import TailorResult
 
 
 @runtime_checkable
@@ -122,3 +125,23 @@ class LlmCvTailor(Protocol):
 
     def available(self) -> bool:
         """Return whether the tailor port can be used."""
+
+    def tailor(
+        self,
+        *,
+        master_cv_yaml: str,
+        candidate_snapshot: CandidateSnapshot,
+        job_detail_fields: dict[str, str],
+        relevance_evidence: list[EvidencePair],
+        hard_constraint_outcome: ConstraintOutcome,
+        hard_constraint_reason: str,
+    ) -> TailorResult:
+        """Produce Gap Report, Tailored YAML, and Edit Summary for one Prepare."""
+
+
+@runtime_checkable
+class PdfRenderer(Protocol):
+    """Renders Tailored CV YAML to PDF (RenderCV in production; faked in tests)."""
+
+    def render_pdf(self, tailored_yaml: str) -> bytes:
+        """Return PDF bytes for the Tailored YAML, or raise on failure."""

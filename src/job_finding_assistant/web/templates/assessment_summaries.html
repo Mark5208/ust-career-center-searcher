@@ -115,6 +115,9 @@
           Show Deadline Passed
         </label>
       </form>
+      {% if prepare_error %}
+      <p class="empty">{{ prepare_error }}</p>
+      {% endif %}
       {% if rows %}
       <ul class="listing">
         {% for row in rows %}
@@ -128,16 +131,34 @@
             {% else %}
             Hard Constraint: {{ row.summary.hard_constraint_outcome }} ·
             Preference: {{ row.summary.preference or "unknown" }} ·
-            Relevance: {{ row.summary.relevance }} ·
-            {% if row.summary.has_preparation_packet %}
-            Preparation Packet{% if row.summary.preparation_packet_stale %} (Stale){% endif %}
-            {% else %}
-            No Preparation Packet
+            Relevance: {{ row.summary.relevance }}
             {% endif %}
+            {% if row.summary.has_preparation_packet %}
+            · Preparation Packet{% if row.summary.preparation_packet_stale %} (Stale){% endif %}
+            {% elif not row.summary.pending %}
+            · No Preparation Packet
             {% endif %}
           </p>
-          {% if not row.can_prepare %}
+          {% if row.summary.has_preparation_packet %}
+          <p class="prepare">
+            <a href="/jobs/{{ row.summary.job_posting_id }}/packet">View Preparation Packet</a>
+            {% if row.can_prepare %}
+            ·
+            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/prepare" style="display:inline">
+              <button type="submit">Re-Prepare</button>
+            </form>
+            {% else %}
+            · Prepare unavailable
+            {% endif %}
+          </p>
+          {% elif not row.can_prepare %}
           <p class="prepare">Prepare unavailable</p>
+          {% else %}
+          <p class="prepare">
+            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/prepare" style="display:inline">
+              <button type="submit">Prepare</button>
+            </form>
+          </p>
           {% endif %}
         </li>
         {% endfor %}
