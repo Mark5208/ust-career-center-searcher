@@ -234,6 +234,11 @@ class FakeLlmJudge:
     def available(self) -> bool:
         return self._available
 
+    def unavailable_reason(self) -> str | None:
+        if self._available:
+            return None
+        return "LLM Unavailable: Fake judge disabled"
+
     def judge_hard_constraint(
         self,
         *,
@@ -326,6 +331,11 @@ class FakeLlmCvTailor:
 
     def available(self) -> bool:
         return self._available
+
+    def unavailable_reason(self) -> str | None:
+        if self._available:
+            return None
+        return "LLM Unavailable: Fake tailor disabled"
 
     def tailor(
         self,

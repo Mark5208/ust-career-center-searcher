@@ -115,6 +115,9 @@
           Show Deadline Passed
         </label>
       </form>
+      {% if llm_unavailable_reason %}
+      <p class="empty">{{ llm_unavailable_reason }}</p>
+      {% endif %}
       {% if prepare_error %}
       <p class="empty">{{ prepare_error }}</p>
       {% endif %}

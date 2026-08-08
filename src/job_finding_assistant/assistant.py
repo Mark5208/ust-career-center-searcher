@@ -28,6 +28,15 @@ from job_finding_assistant.ports import (
 )
 from job_finding_assistant.preparation_packet import PreparationPacket
 
+
+def _llm_unavailable_message(exc: BaseException, *, fallback: str) -> str:
+    """Format a short non-secret LLM Unavailable reason from an exception."""
+    reason = str(exc).strip() or fallback
+    if not reason.lower().startswith("llm unavailable"):
+        return f"LLM Unavailable: {reason}"
+    return reason
+
+
 __all__ = [
     "AssessmentSummary",
     "Assistant",
@@ -120,6 +129,7 @@ class Assistant:
         self._constraint_files = constraint_files
         self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
         self._candidate_file_errors: list[str] = []
+        self._llm_call_error: str | None = None
         store_root = packet_store_dir or catalog_store.db_path.parent / "packets"
         self._packet_store = PacketStore(store_root)
         self._pdf_renderer: PdfRenderer = pdf_renderer or RenderCvPdfRenderer()
@@ -208,7 +218,9 @@ class Assistant:
             )
 
         if not self._llm_cv_tailor.available():
-            raise PrepareFailedError("CV tailor is not available")
+            reason = self._llm_cv_tailor.unavailable_reason() or "LLM Unavailable"
+            self._llm_call_error = reason
+            raise PrepareFailedError(reason)
 
         snapshot = self.get_candidate_snapshot()
         if snapshot is None:
@@ -244,7 +256,10 @@ class Assistant:
                 hard_constraint_reason=assessment.hard_constraint_reason,
             )
         except Exception as exc:
-            raise PrepareFailedError(f"Tailor failed: {exc}") from exc
+            reason = _llm_unavailable_message(exc, fallback="LLM Unavailable: tailor failed")
+            self._llm_call_error = reason
+            raise PrepareFailedError(reason) from exc
+        self._llm_call_error = None
 
         pdf_bytes: bytes | None
         try:
@@ -353,6 +368,14 @@ class Assistant:
         self.refresh_candidate_file_state()
         return list(self._candidate_file_errors)
 
+    def get_llm_unavailable_reason(self) -> str | None:
+        """Short non-secret reason when the live judge/tailor cannot run."""
+        if not self._llm_judge.available():
+            return self._llm_judge.unavailable_reason() or "LLM Unavailable"
+        if not self._llm_cv_tailor.available():
+            return self._llm_cv_tailor.unavailable_reason() or "LLM Unavailable"
+        return self._llm_call_error
+
     def get_crawl_filters(self) -> CrawlFilters:
         """Return Crawl Filters (default Active Job on; Hardline unset)."""
         return self._catalog_store.get_crawl_filters()
@@ -429,8 +452,20 @@ class Assistant:
     def rejudge_pending_assessments(self) -> None:
         """Opportunistically judge Pending Match Assessments (after Crawl / file change)."""
         self.refresh_candidate_file_state()
-        for job_posting_id in self._catalog_store.list_pending_job_posting_ids():
-            self._assess_job_posting(job_posting_id)
+        pending = self._catalog_store.list_pending_job_posting_ids()
+        if not pending:
+            return
+        any_success = False
+        any_llm_failure = False
+        for job_posting_id in pending:
+            outcome = self._assess_job_posting(job_posting_id)
+            if outcome == "saved":
+                any_success = True
+            elif outcome == "llm_failed":
+                any_llm_failure = True
+        # Clear a prior call error only when this batch fully succeeded (no LLM failures).
+        if any_success and not any_llm_failure:
+            self._llm_call_error = None
 
     def refresh_candidate_file_state(self) -> None:
         """Detect Master CV / HC / Preferences content or path-clear changes.
@@ -480,10 +515,12 @@ class Assistant:
         if changed or not had_prior:
             self._catalog_store.save_candidate_fingerprints(**current)
 
-    def _assess_job_posting(self, job_posting_id: str) -> None:
+    def _assess_job_posting(
+        self, job_posting_id: str
+    ) -> Literal["saved", "skipped", "llm_failed"]:
         posting = self._catalog_store.get_job_posting(job_posting_id)
         if posting is None or not posting.get("detail_json"):
-            return
+            return "skipped"
         detail_fields = json.loads(posting["detail_json"] or "{}")
         title = posting.get("title") or ""
         employer = posting.get("employer") or ""
@@ -496,7 +533,7 @@ class Assistant:
         snapshot = self.get_candidate_snapshot()
         if snapshot is None:
             # Relevance requires a usable Master CV / Snapshot → stay Pending.
-            return
+            return "skipped"
 
         hc_read = self._constraint_files.read_hard_constraints()
         prefs_read = self._constraint_files.read_preferences()
@@ -506,7 +543,10 @@ class Assistant:
         needs_prefs_judge = prefs_read.non_empty
         # Relevance always required when Snapshot exists; HC/Prefs when non-empty.
         if not self._llm_judge.available():
-            return
+            self._llm_call_error = (
+                self._llm_judge.unavailable_reason() or "LLM Unavailable"
+            )
+            return "llm_failed"
 
         try:
             if needs_hc_judge:
@@ -541,9 +581,12 @@ class Assistant:
                 job_detail_fields=job_fields,
                 candidate_snapshot=snapshot,
             )
-        except Exception:  # noqa: BLE001 — any judge failure leaves Pending
+        except Exception as exc:  # noqa: BLE001 — any judge failure leaves Pending
             # Judge failure → leave Pending (do not persist a half-assessed row).
-            return
+            self._llm_call_error = _llm_unavailable_message(
+                exc, fallback="LLM Unavailable: judge failed"
+            )
+            return "llm_failed"
 
         assessment = MatchAssessment(
             job_posting_id=job_posting_id,
@@ -555,6 +598,7 @@ class Assistant:
             evidence=list(relevance_result.evidence),
         )
         self._catalog_store.save_match_assessment(assessment)
+        return "saved"
 
 
 def _passes_default_filter(

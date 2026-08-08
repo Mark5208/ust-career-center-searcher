@@ -83,19 +83,23 @@ The browse/list view of fit for one Job Posting: title, employer, Listing status
 _Avoid_: job card, list row, dashboard row
 
 **Pending**:
-Assessment Summary state when a required judgment is missing: Hard Constraint when the Hard Constraints file is non-empty and readable, Preference when the Preferences file is non-empty and readable, or Relevance (needs a usable Master CV / Candidate Snapshot and judge). Also Pending when the judge fails or is unavailable for a required signal, or when the Master CV is unreadable or invalid. Empty Hard Constraints or Preferences files count as resolved unknown, not Pending; a set but unreadable Hard Constraints or Preferences path is unknown for that signal (with a path/read error), not Pending. Prepare is unavailable while Pending; Pending rows sort after assessed ones. Freshness rules: ADR-0014.
+Assessment Summary state when a required judgment is missing: Hard Constraint when the Hard Constraints file is non-empty and readable, Preference when the Preferences file is non-empty and readable, or Relevance (needs a usable Master CV / Candidate Snapshot and judge). Also Pending when the judge fails or is unavailable for a required signal (LLM Unavailable), or when the Master CV is unreadable or invalid. Empty Hard Constraints or Preferences files count as resolved unknown, not Pending; a set but unreadable Hard Constraints or Preferences path is unknown for that signal (with a path/read error), not Pending. Prepare is unavailable while Pending; Pending rows sort after assessed ones. Freshness rules: ADR-0014.
 _Avoid_: loading, unassessed, not ready (alone)
 
+**LLM Unavailable**:
+The live judge or tailor cannot run — missing credentials or provider failure. Required judgments stay Pending (or the prior complete Match Assessment is kept); Prepare stays blocked while Pending. The UI shows a short non-secret reason. Runtime rules: ADR-0015.
+_Avoid_: offline mode, fallback scorer, Fake assessment (as a user-facing mode)
+
 **Match Assessment**:
-The full fit judgment for one Job Posting shown in detail: Hard Constraint with short reason, Preference, Relevance, and Evidence pairs, with actions to Prepare or Delete. On Master CV, Hard Constraints file, or Preferences file change (content or path clear), all assessments go Pending and re-judge asynchronously; new or detail-changed Crawl postings start Pending then re-judge asynchronously (Crawl success does not mean assessments finished). Judge failure leaves Pending or keeps the prior complete assessment — never a half-assessed final row. Otherwise the last Assessment is kept. Rules: ADR-0014.
-_Avoid_: score, analysis, match result, ATS score
+The full fit judgment for one Job Posting on a dedicated detail page (not only the Assessment Summary list): Hard Constraint with short reason, Preference with short reason, Relevance, and Evidence, with actions to Prepare or Delete. Accordion or richer navigation is out of v1. On Master CV, Hard Constraints file, or Preferences file change (content or path clear), all assessments go Pending and re-judge asynchronously; new or detail-changed Crawl postings start Pending then re-judge asynchronously (Crawl success does not mean assessments finished). Judge failure leaves Pending or keeps the prior complete assessment — never a half-assessed final row. Otherwise the last Assessment is kept. Rules: ADR-0014.
+_Avoid_: score, analysis, match result, ATS score, accordion (v1)
 
 **Evidence pair**:
-One justification unit: a Job Posting excerpt, a Master CV or Candidate Snapshot excerpt (or “not found”), and a one-line role — supports or weakens Relevance, or explains a Hard Constraint or Preference judgment.
-_Avoid_: quote pair, citation row
+One justification unit for Relevance: a Job Posting excerpt, a Master CV or Candidate Snapshot excerpt (or “not found”), and a one-line role — supports or weakens Relevance. Hard Constraint and Preference judgments use their short reasons on the Match Assessment (not a separate stored Evidence list in v1).
+_Avoid_: quote pair, citation row, Hard Constraint evidence list, Preference evidence list
 
 **Evidence**:
-The short list of Evidence pairs in a Match Assessment (about three to seven) used to decide Prepare vs skip; deeper gaps belong in the Gap Report after prepare.
+The short list of Relevance Evidence pairs in a Match Assessment (about three to seven) used to decide Prepare vs skip; deeper gaps belong in the Gap Report after prepare.
 _Avoid_: quote, reference, highlight (alone)
 
 **Gap Report**:

@@ -208,6 +208,7 @@ def test_assessment_stays_pending_when_llm_judge_unavailable(tmp_path: Path) -> 
     summary = assistant.list_assessment_summaries()[0]
     assert summary.pending is True
     assert assistant.can_prepare(summary.job_posting_id) is False
+    assert assistant.get_llm_unavailable_reason() == "LLM Unavailable: Fake judge disabled"
 
 
 def test_judge_failure_leaves_pending_without_half_assessment(tmp_path: Path) -> None:
@@ -223,6 +224,9 @@ def test_judge_failure_leaves_pending_without_half_assessment(tmp_path: Path) ->
     assistant.rejudge_pending_assessments()
 
     assert assistant.list_assessment_summaries()[0].pending is True
+    reason = assistant.get_llm_unavailable_reason()
+    assert reason is not None
+    assert reason.startswith("LLM Unavailable:")
 
 
 def test_fingerprint_change_marks_all_assessments_pending(tmp_path: Path) -> None:

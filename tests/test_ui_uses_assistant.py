@@ -45,6 +45,7 @@ class _RecordingAssistant:
         self.hard_constraints_path: str | None = None
         self.preferences_path: str | None = None
         self.candidate_file_errors: list[str] = []
+        self.llm_unavailable_reason: str | None = None
         self.crawl_filters = CrawlFilters()
         self.set_master_cv_calls: list[str] = []
         self.set_hard_constraints_calls: list[str] = []
@@ -160,6 +161,9 @@ class _RecordingAssistant:
     def get_candidate_file_errors(self) -> list[str]:
         return list(self.candidate_file_errors)
 
+    def get_llm_unavailable_reason(self) -> str | None:
+        return self.llm_unavailable_reason
+
     def get_crawl_filters(self) -> CrawlFilters:
         return self.crawl_filters
 
@@ -193,6 +197,17 @@ def test_catalog_page_calls_assistant_and_shows_empty_job_postings_state() -> No
     }
     assert "Assessment Summary" in response.text
     assert "No Job Postings" in response.text
+
+
+def test_catalog_page_shows_llm_unavailable_reason() -> None:
+    assistant = _RecordingAssistant()
+    assistant.llm_unavailable_reason = "LLM Unavailable: API key not configured"
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "LLM Unavailable: API key not configured" in response.text
 
 
 def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pending() -> None:
