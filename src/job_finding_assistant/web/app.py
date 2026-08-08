@@ -25,7 +25,7 @@ from job_finding_assistant.assistant import (
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
-from job_finding_assistant.fakes import FakeLlmCvTailor, FakeLlmJudge
+from job_finding_assistant.llm_runtime import build_llm_ports, load_llm_runtime_config
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
 from job_finding_assistant.preparation_packet import PreparationPacket
 
@@ -98,6 +98,9 @@ class SupportsAssistantUi(Protocol):
     def get_candidate_file_errors(self) -> list[str]:
         """Return path/read errors for candidate files."""
 
+    def get_llm_unavailable_reason(self) -> str | None:
+        """Short non-secret LLM Unavailable reason, if any."""
+
     def get_crawl_filters(self) -> CrawlFilters:
         """Return Crawl Filters."""
 
@@ -161,6 +164,7 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
                 "include_closed": show_closed,
                 "include_passed_deadlines": show_passed,
                 "prepare_error": request.app.state.prepare_error,
+                "llm_unavailable_reason": current.get_llm_unavailable_reason(),
             },
         )
 
@@ -410,12 +414,13 @@ def build_default_assistant(db_path: Path | None = None) -> Assistant:
     data_dir = Path.home() / ".job_finding_assistant"
     catalog_path = db_path or data_dir / "catalog.db"
     crawl_pacer = RandomCrawlPacer()
+    llm_judge, llm_cv_tailor = build_llm_ports(config=load_llm_runtime_config())
     return Assistant(
         catalog_store=CatalogStore(catalog_path),
         job_board=PlaywrightJobBoardSession(headless=False, crawl_pacer=crawl_pacer),
         master_cv=DiskMasterCvStore(data_dir / "master_cv_state"),
-        llm_judge=FakeLlmJudge(),
-        llm_cv_tailor=FakeLlmCvTailor(),
+        llm_judge=llm_judge,
+        llm_cv_tailor=llm_cv_tailor,
         constraint_files=DiskConstraintFilesStore(data_dir / "constraint_files_state"),
         crawl_pacer=crawl_pacer,
         packet_store_dir=data_dir / "packets",

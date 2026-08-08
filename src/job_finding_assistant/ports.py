@@ -94,6 +94,9 @@ class LlmJudge(Protocol):
     def available(self) -> bool:
         """Return whether the judge port can be used."""
 
+    def unavailable_reason(self) -> str | None:
+        """Short non-secret LLM Unavailable reason when not available; else None."""
+
     def judge_hard_constraint(
         self,
         *,
@@ -125,6 +128,9 @@ class LlmCvTailor(Protocol):
 
     def available(self) -> bool:
         """Return whether the tailor port can be used."""
+
+    def unavailable_reason(self) -> str | None:
+        """Short non-secret LLM Unavailable reason when not available; else None."""
 
     def tailor(
         self,

@@ -1,6 +1,6 @@
 # Architecture — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014. This file describes the **current running code**; decided-but-unimplemented shape is under [Decided next (docs ahead of code)](#decided-next-docs-ahead-of-code).
+Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014; LLM runtime: ADR-0015. This file describes the **current running code**; decided-but-unimplemented shape is under [Decided next (docs ahead of code)](#decided-next-docs-ahead-of-code).
 
 ## Runtime shape
 
@@ -12,7 +12,7 @@ Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 
 - **Hard Constraints / Preferences:** plain-text file paths via `DiskConstraintFilesStore` (tool reads only; empty/missing → unknown without judge).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests.
 - **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
-- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary); faked in tests.
+- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary). Normal app path: OpenAI-compatible live client from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / model; ADR-0015). Missing key → unavailable adapters (not Fake). Fake stays for tests only.
 - **PDF:** `PdfRenderer` (`RenderCvPdfRenderer` via RenderCV CLI; `FakePdfRenderer` in tests). PDF-only failure leaves packet without PDF.
 
 ```
@@ -22,8 +22,8 @@ Browser → FastAPI/Jinja → Assistant → CatalogStore (SQLite)
                               ├→ CrawlPacer (Random live / Fake or NoOp in tests)
                               ├→ MasterCvStore (DiskMasterCvStore)
                               ├→ ConstraintFilesStore (DiskConstraintFilesStore)
-                              ├→ LlmJudge
-                              ├→ LlmCvTailor
+                              ├→ LlmJudge (OpenAI-compatible live / Unavailable / Fake in tests)
+                              ├→ LlmCvTailor (same client+model as judge / Unavailable / Fake in tests)
                               └→ PdfRenderer (RenderCV / Fake)
 ```
 
@@ -95,7 +95,8 @@ src/job_finding_assistant/
   master_cv_store.py        # DiskMasterCvStore (path state; read-only Master CV YAML)
   catalog_store.py          # SQLite CatalogStore
   ports.py                  # Protocols for adapters
-  fakes.py                  # Test / local-shell fakes
+  llm_runtime.py            # OpenAI-compatible LlmJudge / LlmCvTailor + Unavailable (ADR-0015)
+  fakes.py                  # Test fakes (never wired into build_default_assistant)
   web/
     app.py                  # create_app(assistant), main()
     templates/              # catalog + candidate + crawl + packet + prepare confirm
@@ -104,7 +105,7 @@ tests/                      # Behavior through Assistant (+ UI→Assistant)
 
 ## Candidate / Crawl / Assessment / Prepare UI
 
-- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare / Re-Prepare; Delete; packet presence/Stale; opportunistic rejudge on load)
+- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare / Re-Prepare; Delete; packet presence/Stale; opportunistic rejudge on load; short non-secret LLM Unavailable reason when judge/tailor cannot run)
 - `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
 - `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)
 - `/jobs/{id}/packet` — Gap Report → Edit Summary → Tailored downloads + current Match Assessment
@@ -129,5 +130,5 @@ Live Crawls intentionally wait randomly between Job Board list pages and detail 
 
 Not implemented yet. Product intent in `CONTEXT.md` and ADRs:
 
-- Live `LlmJudge` / `LlmCvTailor` providers (not Fake) implementing ADR-0008 / 0009 / 0010 / 0011 / 0012 rubrics end-to-end.
+- Dedicated Match Assessment detail page (signals + Relevance Evidence + Prepare/Delete); accordion/richer nav out of v1. HC/Preference show short reasons only (no separate stored Evidence lists).
 - Production PDF uses `RenderCvPdfRenderer` (RenderCV CLI); local shell falls back to missing-PDF signal when the CLI is unavailable. Tests use `FakePdfRenderer`.

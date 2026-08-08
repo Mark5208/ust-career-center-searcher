@@ -1,8 +1,8 @@
 # Design document — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0014`. Parent spec: GitHub issue #1.
+Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0015`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0014 Prepare/assessment/CV slices through `Assistant` are implemented for Match Assessment, Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), and Delete cascade. Live LLM/RenderCV providers remain ahead of production wiring.
+**Docs vs code:** ADRs 0005–0015 Prepare/assessment/CV/LLM slices through `Assistant` are implemented for Assessment Summary, Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` (env key; Unavailable when missing; Fake only in tests). Still ahead of UI/code: a dedicated Match Assessment detail page (Relevance Evidence + reasons; accordion out of v1).
 
 ## Primary seam
 
@@ -34,15 +34,19 @@ Implemented through `Assistant.refresh_candidate_file_state` + `rejudge_pending_
 
 ### Hard Constraint rubric (ADR-0010)
 
-Implemented at the `LlmJudge.judge_hard_constraint` call site (Fake in tests; live provider still thin):
+Implemented at the `LlmJudge.judge_hard_constraint` call site (live OpenAI-compatible prompts; Fake in tests):
 
 - Inputs: Hard Constraints file + Job Posting only (never CV, never Preferences).
 - Empty/missing file → unknown without judge; unreadable path → unknown + error.
-- Precedence / conservative inference belong in the live judge prompt (ADR-0010); Fake scripts outcomes.
+- Precedence / conservative inference in the live judge prompt (ADR-0010); Fake scripts outcomes.
 
 ### Judge rubrics (ADR-0008)
 
 Preference and Relevance call sites enforce input isolation (`judge_preference` never sees CV; `judge_relevance` never sees Preferences). Band criteria live in the live judge prompt; Fake scripts bands for tests.
+
+### LLM runtime (ADR-0015)
+
+`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 
@@ -52,10 +56,10 @@ Preference and Relevance call sites enforce input isolation (`judge_preference` 
 
 ### Tailored CV formatting (ADR-0009)
 
-Implemented at the `LlmCvTailor.tailor` call site (Fake scripts results in tests):
+Implemented at the `LlmCvTailor.tailor` call site (live OpenAI-compatible prompts; Fake scripts results in tests):
 
 - “Higher on the page” = earlier RenderCV YAML order after render; no pixel layout.
-- Operation priority and pin rules belong in the live tailor prompt (ADR-0009); Fake returns scripted YAML + Edit Summary.
+- Operation priority and pin rules in the live tailor prompt (ADR-0009); Fake returns scripted YAML + Edit Summary.
 - Optional `assistant.pinned_section_order` is stripped before PDF render.
 
 ### Gap Report (ADR-0011)
