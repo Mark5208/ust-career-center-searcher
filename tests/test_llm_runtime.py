@@ -48,6 +48,32 @@ def _chat_response(payload: dict[str, Any]) -> httpx.Response:
     )
 
 
+def test_openai_client_default_timeout_is_thirty_seconds() -> None:
+    client = OpenAiCompatibleLlmClient(api_key="sk-test")
+    assert client._timeout == 30.0
+    assert client._http.timeout.read == 30.0
+    client.close()
+
+
+def test_provider_timeout_maps_to_llm_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        raise httpx.TimeoutException("read timed out", request=None)
+
+    judge = OpenAiCompatibleLlmJudge(
+        OpenAiCompatibleLlmClient(
+            api_key="sk-test",
+            http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+    )
+    with pytest.raises(LlmUnavailableError) as err:
+        judge.judge_relevance(
+            job_detail_fields={"title": "SWE"},
+            candidate_snapshot=_snapshot(),
+        )
+    assert err.value.reason == "LLM Unavailable: provider timed out"
+
+
 def test_missing_api_key_config_is_unavailable() -> None:
     with patch.dict(os.environ, {}, clear=True):
         config = load_llm_runtime_config()

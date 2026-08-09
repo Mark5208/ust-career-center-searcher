@@ -146,6 +146,84 @@ def test_rejudge_builds_three_signal_assessment_with_empty_constraint_files(
     assert len(judge.relevance_calls) == 1
 
 
+def test_rejudge_pending_assessments_budgets_one_posting_per_call(tmp_path: Path) -> None:
+    entry_a, detail_a = _open_posting(job_id="86534", title="Engineer A")
+    entry_b, detail_b = _open_posting(job_id="86535", title="Engineer B", employer="Other")
+    job_board = FakeJobBoardSession(
+        authenticated=True,
+        list_entries=[entry_a, entry_b],
+        details={detail_a.id: detail_a, detail_b.id: detail_b},
+    )
+    judge = FakeLlmJudge(relevance="Strong")
+    cv_path = _write_cv(tmp_path)
+    master_cv = FakeMasterCvStore()
+    assistant = _assistant(
+        tmp_path,
+        job_board=job_board,
+        master_cv=master_cv,
+        llm_judge=judge,
+    )
+    assistant.set_master_cv_path(str(cv_path))
+    assistant.run_crawl()
+
+    assistant.rejudge_pending_assessments()
+
+    summaries = {
+        row.job_posting_id: row for row in assistant.list_assessment_summaries()
+    }
+    assert len(summaries) == 2
+    pending_count = sum(1 for row in summaries.values() if row.pending)
+    assessed_count = sum(1 for row in summaries.values() if not row.pending)
+    assert assessed_count == 1
+    assert pending_count == 1
+    assert judge.judge_calls == 1
+
+    assistant.rejudge_pending_assessments()
+    assert all(not row.pending for row in assistant.list_assessment_summaries())
+    assert judge.judge_calls == 2
+
+
+def test_rejudge_does_not_starve_later_pending_when_head_fails(tmp_path: Path) -> None:
+    """One failing Pending head must not block later jobs forever (HOL)."""
+    entry_a, detail_a = _open_posting(job_id="85904", title="Engineer A")
+    entry_b, detail_b = _open_posting(
+        job_id="86497", title="Engineer B", employer="Other"
+    )
+    job_board = FakeJobBoardSession(
+        authenticated=True,
+        list_entries=[entry_a, entry_b],
+        details={detail_a.id: detail_a, detail_b.id: detail_b},
+    )
+    judge = FakeLlmJudge(
+        relevance="Strong",
+        fail_for_titles=frozenset({"Engineer A"}),
+    )
+    cv_path = _write_cv(tmp_path)
+    assistant = _assistant(
+        tmp_path,
+        job_board=job_board,
+        master_cv=FakeMasterCvStore(),
+        llm_judge=judge,
+    )
+    assistant.set_master_cv_path(str(cv_path))
+    assistant.run_crawl()
+
+    # Budget is one attempt per call; head fails then later Pending must still advance.
+    assistant.rejudge_pending_assessments()
+    assistant.rejudge_pending_assessments()
+    assistant.rejudge_pending_assessments()
+
+    by_id = {row.job_posting_id: row for row in assistant.list_assessment_summaries()}
+    assert by_id["85904"].pending is True
+    assert assistant.can_prepare("85904") is False
+    assert by_id["86497"].pending is False
+    assert assistant.can_prepare("86497") is True
+    assert assistant.get_match_assessment("86497") is not None
+    reason = assistant.get_llm_unavailable_reason()
+    assert reason is not None
+    assert reason.startswith("LLM Unavailable:")
+
+
 def test_non_empty_constraint_files_invoke_llm_with_input_isolation(
     tmp_path: Path,
 ) -> None:
@@ -580,7 +658,9 @@ def test_default_sort_preference_then_relevance_deadline_unknown_last(
     assistant.set_preferences_path(str(prefs_path))
     assistant.set_hard_constraints_path(str(hc_path))
     assert assistant.run_crawl().stored_count == 5
-    assistant.rejudge_pending_assessments()
+    # Opportunistic rejudge budgets one Pending posting per call.
+    for _ in range(5):
+        assistant.rejudge_pending_assessments()
 
     assistant._catalog_store.save_match_assessment(
         MatchAssessment(
