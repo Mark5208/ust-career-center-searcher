@@ -2,12 +2,19 @@
 
 Selectors follow `.scratch/job-board-dom.md` research for the live board only.
 Primary automated tests use FakeJobBoardSession instead.
+
+Playwright's sync API is greenlet/thread-affine. FastAPI runs sync routes in a
+threadpool, so every Playwright call is marshaled onto one dedicated worker
+thread (otherwise GET /crawl after Crawl raises greenlet.error → 500).
 """
 
 from __future__ import annotations
 
+import queue
 import re
-from typing import Any
+import threading
+from collections.abc import Callable
+from typing import Any, TypeVar
 from urllib.parse import parse_qs, urlparse
 
 from job_finding_assistant.crawl_filters import CrawlFilters
@@ -30,6 +37,8 @@ _FILTER_SELECTS: tuple[tuple[str, str], ...] = (
 
 _JP_RE = re.compile(r"[?&]jp=(\d+)")
 
+T = TypeVar("T")
+
 
 class PlaywrightJobBoardSession:
     """Live HKUST Job Board session driven by Playwright (headed by default)."""
@@ -46,73 +55,156 @@ class PlaywrightJobBoardSession:
         self._browser: Any = None
         self._context: Any = None
         self._page: Any = None
+        self._worker: threading.Thread | None = None
+        self._commands: queue.Queue[tuple[Callable[[], object], threading.Event, dict[str, object]] | None] = (
+            queue.Queue()
+        )
+        self._closed = False
 
     def open_login(self) -> None:
         """Open a headed browser on the Job Board for User-Attended Login."""
-        self._ensure_browser()
-        assert self._page is not None
-        self._page.goto(JOB_BOARD_URL, wait_until="domcontentloaded")
+
+        def work() -> None:
+            self._ensure_browser()
+            assert self._page is not None
+            self._page.goto(JOB_BOARD_URL, wait_until="domcontentloaded")
+
+        self._call(work)
 
     def is_authenticated(self) -> bool:
         """True when User-Attended Login left a welcome marker on the Job Board."""
-        if self._page is None:
-            return False
-        try:
-            welcome = self._page.locator(".career-user-welcome")
-            return bool(welcome.count() > 0)
-        except RuntimeError:
-            return False
+
+        def work() -> bool:
+            if self._page is None:
+                return False
+            try:
+                welcome = self._page.locator(".career-user-welcome")
+                return bool(welcome.count() > 0)
+            except Exception:  # noqa: BLE001 — soft-fail; never 500 the crawl page
+                return False
+
+        return self._call(work)
 
     def discover_job_list(self, filters: CrawlFilters) -> list[JobListEntry]:
         """Apply Crawl Filters, paginate, and return list rows."""
-        self._require_page()
-        assert self._page is not None
-        if not self.is_authenticated():
-            raise AuthLostError("Job Board session is not authenticated")
-        self._page.goto(JOB_BOARD_URL, wait_until="domcontentloaded")
-        self._apply_filters(filters)
-        entries: list[JobListEntry] = []
-        while True:
-            self._page.wait_for_selector("#job-list", state="attached")
-            entries.extend(self._read_list_page())
-            next_link = self._page.locator("ul.pagination li.next a")
-            if next_link.count() == 0:
-                break
-            self._crawl_pacer.pause_before_next_page()
-            next_link.first.click()
-            self._page.wait_for_selector("#job-list", state="attached")
-        return entries
+
+        def work() -> list[JobListEntry]:
+            self._require_page()
+            assert self._page is not None
+            if not self._is_authenticated_on_worker():
+                raise AuthLostError("Job Board session is not authenticated")
+            self._page.goto(JOB_BOARD_URL, wait_until="domcontentloaded")
+            self._apply_filters(filters)
+            entries: list[JobListEntry] = []
+            while True:
+                self._page.wait_for_selector("#job-list", state="attached")
+                entries.extend(self._read_list_page())
+                next_link = self._page.locator("ul.pagination li.next a")
+                if next_link.count() == 0:
+                    break
+                self._crawl_pacer.pause_before_next_page()
+                next_link.first.click()
+                self._page.wait_for_selector("#job-list", state="attached")
+            return entries
+
+        return self._call(work)
 
     def fetch_job_detail(self, job_posting_id: str) -> JobPostingDetail:
         """Open the detail page in a tab, read structured fields, then close it."""
-        self._require_page()
-        assert self._context is not None
-        if not self.is_authenticated():
-            raise AuthLostError("Job Board session is not authenticated")
-        detail = self._context.new_page()
-        try:
-            detail.goto(
-                f"{JOB_DETAIL_URL}?jp={job_posting_id}",
-                wait_until="domcontentloaded",
-            )
-            if detail.locator(".career-content").count() == 0:
-                raise AuthLostError("Job Board session lost during detail fetch")
-            return _read_detail_page(detail, job_posting_id)
-        finally:
-            detail.close()
+
+        def work() -> JobPostingDetail:
+            self._require_page()
+            assert self._context is not None
+            if not self._is_authenticated_on_worker():
+                raise AuthLostError("Job Board session is not authenticated")
+            detail = self._context.new_page()
+            try:
+                detail.goto(
+                    f"{JOB_DETAIL_URL}?jp={job_posting_id}",
+                    wait_until="domcontentloaded",
+                )
+                if detail.locator(".career-content").count() == 0:
+                    raise AuthLostError("Job Board session lost during detail fetch")
+                return _read_detail_page(detail, job_posting_id)
+            finally:
+                detail.close()
+
+        return self._call(work)
 
     def close(self) -> None:
         """Release browser resources."""
-        if self._browser is not None:
-            self._browser.close()
-        if self._playwright is not None:
-            self._playwright.stop()
-        self._browser = None
-        self._playwright = None
-        self._context = None
-        self._page = None
+        if self._closed:
+            return
+
+        def work() -> None:
+            if self._browser is not None:
+                self._browser.close()
+            if self._playwright is not None:
+                self._playwright.stop()
+            self._browser = None
+            self._playwright = None
+            self._context = None
+            self._page = None
+
+        try:
+            if self._worker is not None and self._worker.is_alive():
+                self._call(work)
+        finally:
+            self._closed = True
+            self._commands.put(None)
+            if self._worker is not None:
+                self._worker.join(timeout=30)
+            self._worker = None
+
+    def _call(self, fn: Callable[[], T]) -> T:
+        """Run ``fn`` on the dedicated Playwright worker thread."""
+        if self._closed and threading.current_thread() is not self._worker:
+            raise RuntimeError("Playwright Job Board session is closed")
+        self._ensure_worker()
+        assert self._worker is not None
+        if threading.current_thread() is self._worker:
+            return fn()
+        done = threading.Event()
+        box: dict[str, object] = {}
+
+        def task() -> object:
+            return fn()
+
+        self._commands.put((task, done, box))
+        if not done.wait(timeout=600):
+            raise TimeoutError("Playwright worker did not finish in time")
+        error = box.get("error")
+        if isinstance(error, BaseException):
+            raise error
+        return box["result"]  # type: ignore[return-value]
+
+    def _ensure_worker(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            return
+        if self._closed:
+            raise RuntimeError("Playwright Job Board session is closed")
+        self._worker = threading.Thread(
+            target=self._worker_loop,
+            name="playwright-job-board",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _worker_loop(self) -> None:
+        while True:
+            item = self._commands.get()
+            if item is None:
+                break
+            fn, done, box = item
+            try:
+                box["result"] = fn()
+            except Exception as exc:  # noqa: BLE001 — re-raise on caller thread via box
+                box["error"] = exc
+            finally:
+                done.set()
 
     def _ensure_browser(self) -> None:
+        """Create browser/page if needed. Must run on the Playwright worker thread."""
         if self._page is not None:
             return
         try:
@@ -126,6 +218,15 @@ class PlaywrightJobBoardSession:
         self._browser = self._playwright.chromium.launch(headless=self._headless)
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
+
+    def _is_authenticated_on_worker(self) -> bool:
+        if self._page is None:
+            return False
+        try:
+            welcome = self._page.locator(".career-user-welcome")
+            return bool(welcome.count() > 0)
+        except Exception:  # noqa: BLE001 — soft-fail; never 500 the crawl page
+            return False
 
     def _require_page(self) -> None:
         if self._page is None:
