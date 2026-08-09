@@ -51,7 +51,7 @@ Preference and Relevance call sites enforce input isolation (`judge_preference` 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 
 - Master CV is RenderCV YAML on disk; tool never overwrites it; Candidate Snapshot rebuilds from YAML.
-- Tailored YAML may be rendered to PDF via RenderCV at Prepare (still ahead); ADR-0003 no-fabrication rules still apply with YAML structure preservation.
+- Tailored YAML is rendered to PDF via RenderCV at Prepare (`RenderCvPdfRenderer`; PDF-only failure may leave packet without PDF); ADR-0003 no-fabrication rules still apply with YAML structure preservation.
 - Python ≥3.12 required for RenderCV; LaTeX Master CV not retained for v1.
 
 ### Tailored CV formatting (ADR-0009)
@@ -102,7 +102,7 @@ Through `Assistant` and `/candidate` UI:
 - Set Hard Constraints and Preferences plain-text file paths (`DiskConstraintFilesStore`); tool reads only; empty/missing → unknown without judge.
 - Structured languages / locations / Gap Tolerance Preferences form removed (ADR-0005).
 - LaTeX Master CV is not a supported v1 format.
-- Python ≥3.12; `rendercv` + PyYAML dependencies (PDF rendering deferred to Prepare).
+- Python ≥3.12; `rendercv` + PyYAML dependencies (PDF render is a Prepare concern, shipped with packets).
 
 ## Crawl slice (issue #4)
 
