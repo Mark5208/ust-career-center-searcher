@@ -125,7 +125,9 @@
       <ul class="listing">
         {% for row in rows %}
         <li>
-          <p class="title">{{ row.summary.title }} — {{ row.summary.employer }}</p>
+          <p class="title">
+            <a href="/jobs/{{ row.summary.job_posting_id }}">{{ row.summary.title }} — {{ row.summary.employer }}</a>
+          </p>
           <p class="meta">
             Listing: {{ row.summary.listing_status }} ·
             Deadline: {{ row.summary.deadline_status }} ·
@@ -142,8 +144,10 @@
             · No Preparation Packet
             {% endif %}
           </p>
-          {% if row.summary.has_preparation_packet %}
           <p class="prepare">
+            <a href="/jobs/{{ row.summary.job_posting_id }}">View Match Assessment</a>
+            {% if row.summary.has_preparation_packet %}
+            ·
             <a href="/jobs/{{ row.summary.job_posting_id }}/packet">View Preparation Packet</a>
             {% if row.can_prepare %}
             ·
@@ -157,17 +161,14 @@
             <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
               <button type="submit">Delete</button>
             </form>
-          </p>
-          {% elif not row.can_prepare %}
-          <p class="prepare">
-            Prepare unavailable
+            {% elif not row.can_prepare %}
+            · Prepare unavailable
             ·
             <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
               <button type="submit">Delete</button>
             </form>
-          </p>
-          {% else %}
-          <p class="prepare">
+            {% else %}
+            ·
             <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/prepare" style="display:inline">
               <button type="submit">Prepare</button>
             </form>
@@ -175,8 +176,8 @@
             <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
               <button type="submit">Delete</button>
             </form>
+            {% endif %}
           </p>
-          {% endif %}
         </li>
         {% endfor %}
       </ul>

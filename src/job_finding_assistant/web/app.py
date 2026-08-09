@@ -26,6 +26,7 @@ from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.llm_runtime import build_llm_ports, load_llm_runtime_config
+from job_finding_assistant.match_assessment import MatchAssessment
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
 from job_finding_assistant.preparation_packet import PreparationPacket
 
@@ -43,6 +44,9 @@ class SupportsAssistantUi(Protocol):
 
     def can_prepare(self, job_posting_id: str) -> bool:
         """Return whether Prepare is available for the Job Posting."""
+
+    def get_match_assessment(self, job_posting_id: str) -> MatchAssessment | None:
+        """Return Match Assessment detail, or None when Pending."""
 
     def prepare(
         self,
@@ -164,6 +168,31 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
                 "include_closed": show_closed,
                 "include_passed_deadlines": show_passed,
                 "prepare_error": request.app.state.prepare_error,
+                "llm_unavailable_reason": current.get_llm_unavailable_reason(),
+            },
+        )
+
+    @app.get("/jobs/{job_posting_id}", response_class=HTMLResponse)
+    def match_assessment_detail_page(
+        request: Request, job_posting_id: str
+    ) -> Response:
+        current = request.app.state.assistant
+        summary: AssessmentSummary | None = None
+        for row in current.list_assessment_summaries(
+            include_closed=True, include_passed_deadlines=True
+        ):
+            if row.job_posting_id == job_posting_id:
+                summary = row
+                break
+        if summary is None:
+            return RedirectResponse(url="/", status_code=303)
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "match_assessment_detail.html",
+            {
+                "summary": summary,
+                "match_assessment": current.get_match_assessment(job_posting_id),
+                "can_prepare": current.can_prepare(job_posting_id),
                 "llm_unavailable_reason": current.get_llm_unavailable_reason(),
             },
         )

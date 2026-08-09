@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0015`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0015 Prepare/assessment/CV/LLM slices through `Assistant` are implemented for Assessment Summary, Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` (env key; Unavailable when missing; Fake only in tests). Still ahead of UI/code: a dedicated Match Assessment detail page (Relevance Evidence + reasons; accordion out of v1).
+**Docs vs code:** ADRs 0005–0015 Prepare/assessment/CV/LLM slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with Relevance Evidence + HC/Preference reasons), Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` (env key; Unavailable when missing; Fake only in tests). Accordion / richer Match Assessment nav remains out of v1.
 
 ## Primary seam
 
@@ -46,7 +46,7 @@ Preference and Relevance call sites enforce input isolation (`judge_preference` 
 
 ### LLM runtime (ADR-0015)
 
-`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
+`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse/timeout failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). Opportunistic rejudge assesses at most one Pending posting per catalog load. No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 
