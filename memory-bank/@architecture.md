@@ -1,6 +1,6 @@
 # Architecture — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014; LLM runtime: ADR-0015. This file describes the **current running code**; decided-but-unimplemented shape is under [Decided next (docs ahead of code)](#decided-next-docs-ahead-of-code).
+Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014; LLM runtime: ADR-0015. This file describes the **current running code**.
 
 ## Runtime shape
 
@@ -12,7 +12,7 @@ Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 
 - **Hard Constraints / Preferences:** plain-text file paths via `DiskConstraintFilesStore` (tool reads only; empty/missing → unknown without judge).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests.
 - **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
-- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary). Normal app path: OpenAI-compatible live client from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / model; ADR-0015). Missing key → unavailable adapters (not Fake). Fake stays for tests only.
+- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary). Normal app path: OpenAI-compatible live client from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / model; ADR-0015). Missing key → unavailable adapters (not Fake). Fake stays for tests only. Catalog `rejudge_pending_assessments` budgets one Pending posting per call (refresh continues); live HTTP timeout 30s → LLM Unavailable. Compatible hosts (e.g. DeepSeek) need matching `JOB_FINDING_ASSISTANT_LLM_MODEL`, not the OpenAI default.
 - **PDF:** `PdfRenderer` (`RenderCvPdfRenderer` via RenderCV CLI; `FakePdfRenderer` in tests). PDF-only failure leaves packet without PDF.
 
 ```
@@ -99,13 +99,14 @@ src/job_finding_assistant/
   fakes.py                  # Test fakes (never wired into build_default_assistant)
   web/
     app.py                  # create_app(assistant), main()
-    templates/              # catalog + candidate + crawl + packet + prepare confirm
+    templates/              # catalog + match assessment detail + candidate + crawl + packet + prepare/delete confirm
 tests/                      # Behavior through Assistant (+ UI→Assistant)
 ```
 
 ## Candidate / Crawl / Assessment / Prepare UI
 
-- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; Prepare / Re-Prepare; Delete; packet presence/Stale; opportunistic rejudge on load; short non-secret LLM Unavailable reason when judge/tailor cannot run)
+- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; links to Match Assessment detail; Prepare / Re-Prepare; Delete; packet presence/Stale; opportunistic rejudge of at most one Pending posting on load; short non-secret LLM Unavailable reason when judge/tailor cannot run)
+- `/jobs/{id}` — Match Assessment detail (HC + reason, Preference + reason, Relevance, Relevance Evidence; Prepare / Delete; Pending / LLM Unavailable clear; no accordion / Override)
 - `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
 - `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)
 - `/jobs/{id}/packet` — Gap Report → Edit Summary → Tailored downloads + current Match Assessment
@@ -126,9 +127,7 @@ pytest
 
 Live Crawls intentionally wait randomly between Job Board list pages and detail fetches to reduce bursty request patterns.
 
-## Decided next (docs ahead of code)
+## Notes
 
-Not implemented yet. Product intent in `CONTEXT.md` and ADRs:
-
-- Dedicated Match Assessment detail page (signals + Relevance Evidence + Prepare/Delete); accordion/richer nav out of v1. HC/Preference show short reasons only (no separate stored Evidence lists).
 - Production PDF uses `RenderCvPdfRenderer` (RenderCV CLI); local shell falls back to missing-PDF signal when the CLI is unavailable. Tests use `FakePdfRenderer`.
+- Accordion / richer Match Assessment navigation chrome remains out of v1; HC/Preference show short reasons only (no separate stored Evidence lists).

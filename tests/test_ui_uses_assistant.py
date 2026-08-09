@@ -1,5 +1,6 @@
 """UI route talks only to Assistant for Assessment Summary listing."""
 
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -17,11 +18,14 @@ from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.fakes import (
     FakeConstraintFilesStore,
+    FakeCrawlPacer,
     FakeJobBoardSession,
     FakeLlmCvTailor,
     FakeLlmJudge,
     FakeMasterCvStore,
 )
+from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
+from job_finding_assistant.match_assessment import EvidencePair, MatchAssessment
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
 from job_finding_assistant.preparation_packet import (
     EditSummary,
@@ -64,6 +68,8 @@ class _RecordingAssistant:
             "Delete permanently removes Job Posting 'System Engineer — Example Corp', "
             "Match Assessment, and Preparation Packet. No undo."
         )
+        self.match_assessments: dict[str, MatchAssessment] = {}
+        self.get_match_assessment_calls: list[str] = []
 
     def list_assessment_summaries(
         self,
@@ -85,6 +91,10 @@ class _RecordingAssistant:
                 continue
             return not row.pending
         return False
+
+    def get_match_assessment(self, job_posting_id: str) -> MatchAssessment | None:
+        self.get_match_assessment_calls.append(job_posting_id)
+        return self.match_assessments.get(job_posting_id)
 
     def prepare(
         self,
@@ -278,6 +288,74 @@ def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -
 
     assert response.status_code == 200
     assert "No Job Postings" in response.text
+
+
+def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
+    """Catalog GET must not block on judging every Pending posting (ADR-0015 opportunistic)."""
+    cv_path = tmp_path / "master_CV.yaml"
+    cv_path.write_text(
+        "cv:\n  name: Test\n  sections:\n    experience:\n      - company: X\n        position: Y\n",
+        encoding="utf-8",
+    )
+    entries = [
+        JobListEntry(
+            id="86534",
+            title="Engineer A",
+            employer="Corp A",
+            posting_date="2026-07-01",
+            application_deadline="2026-12-31",
+        ),
+        JobListEntry(
+            id="86535",
+            title="Engineer B",
+            employer="Corp B",
+            posting_date="2026-07-01",
+            application_deadline="2026-12-31",
+        ),
+    ]
+    details = {
+        entry.id: JobPostingDetail(
+            id=entry.id,
+            title=entry.title,
+            employer=entry.employer,
+            posting_date=entry.posting_date,
+            application_deadline=entry.application_deadline,
+            fields={"Job Description": f"Detail for {entry.title}"},
+        )
+        for entry in entries
+    }
+    judge = FakeLlmJudge(relevance="Strong", delay_seconds=2.0)
+    master_cv = FakeMasterCvStore()
+    assistant = Assistant(
+        catalog_store=CatalogStore(tmp_path / "catalog.db"),
+        job_board=FakeJobBoardSession(
+            authenticated=True,
+            list_entries=entries,
+            details=details,
+        ),
+        master_cv=master_cv,
+        llm_judge=judge,
+        llm_cv_tailor=FakeLlmCvTailor(),
+        constraint_files=FakeConstraintFilesStore(),
+        crawl_pacer=FakeCrawlPacer(),
+    )
+    assistant.set_master_cv_path(str(cv_path))
+    assistant.run_crawl()
+    assert len(assistant.list_assessment_summaries()) == 2
+    assert all(row.pending for row in assistant.list_assessment_summaries())
+
+    client = TestClient(create_app(assistant))
+    started = time.perf_counter()
+    response = client.get("/")
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 200
+    assert elapsed < 3.0
+    assert judge.judge_calls == 1
+    pending_after = sum(
+        1 for row in assistant.list_assessment_summaries() if row.pending
+    )
+    assert pending_after == 1
 
 
 def test_candidate_page_calls_assistant_for_snapshot_and_constraint_paths() -> None:
@@ -506,3 +584,200 @@ def test_catalog_delete_route_uses_assistant_with_confirm() -> None:
     assert confirmed.status_code == 303
     assert confirmed.headers["location"] == "/"
     assert assistant.delete_calls == [("86534", False), ("86534", True)]
+
+
+def test_catalog_links_to_match_assessment_detail_page() -> None:
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="pass",
+            preference="Strong",
+            relevance="Mixed",
+        )
+    ]
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/jobs/86534"' in response.text
+    assert "Override" not in response.text
+
+
+def test_match_assessment_detail_page_uses_assistant_and_shows_signals() -> None:
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="fail",
+            preference="Mixed",
+            relevance="Strong",
+        )
+    ]
+    assistant.match_assessments["86534"] = MatchAssessment(
+        job_posting_id="86534",
+        hard_constraint_outcome="fail",
+        hard_constraint_reason="Requires relocation outside Hong Kong",
+        preference="Mixed",
+        preference_reason="Fintech preferred but role is general IT",
+        relevance="Strong",
+        evidence=[
+            EvidencePair(
+                job_excerpt="Python platform work",
+                candidate_excerpt="Platform engineer at Example",
+                role="supports Relevance",
+            ),
+            EvidencePair(
+                job_excerpt="On-call rotation",
+                candidate_excerpt="not found",
+                role="weakens Relevance",
+            ),
+        ],
+    )
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/jobs/86534")
+
+    assert response.status_code == 200
+    assert assistant.get_match_assessment_calls == ["86534"]
+    assert "Match Assessment" in response.text
+    assert "System Engineer" in response.text
+    assert "Example Corp" in response.text
+    assert "Hard Constraint" in response.text
+    assert "fail" in response.text
+    assert "Requires relocation outside Hong Kong" in response.text
+    assert "Preference" in response.text
+    assert "Mixed" in response.text
+    assert "Fintech preferred but role is general IT" in response.text
+    assert "Relevance" in response.text
+    assert "Strong" in response.text
+    assert "Python platform work" in response.text
+    assert "Platform engineer at Example" in response.text
+    assert "supports Relevance" in response.text
+    assert "On-call rotation" in response.text
+    assert 'action="/jobs/86534/prepare"' in response.text
+    assert 'action="/jobs/86534/delete"' in response.text
+    assert "Override" not in response.text
+    assert "accordion" not in response.text.lower()
+
+
+def test_match_assessment_detail_pending_blocks_prepare_and_shows_clear_state() -> None:
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=True,
+        )
+    ]
+    assistant.llm_unavailable_reason = "LLM Unavailable: API key not configured"
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/jobs/86534")
+
+    assert response.status_code == 200
+    assert assistant.get_match_assessment_calls == ["86534"]
+    assert "Pending" in response.text
+    assert "Prepare unavailable" in response.text
+    assert "LLM Unavailable: API key not configured" in response.text
+    assert 'action="/jobs/86534/prepare"' not in response.text
+    assert 'action="/jobs/86534/delete"' in response.text
+
+
+def test_match_assessment_detail_missing_posting_redirects_home() -> None:
+    assistant = _RecordingAssistant()
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/jobs/missing", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+
+
+def test_match_assessment_detail_with_wired_assistant_shows_evidence(
+    tmp_path: Path,
+) -> None:
+    cv_path = tmp_path / "master_CV.yaml"
+    cv_path.write_text(
+        "cv:\n  name: Test\n  sections:\n    experience:\n"
+        "      - company: Example\n        position: Platform engineer\n",
+        encoding="utf-8",
+    )
+    hc_path = tmp_path / "hard.txt"
+    hc_path.write_text("Hong Kong only\n", encoding="utf-8")
+    prefs_path = tmp_path / "prefs.txt"
+    prefs_path.write_text("Prefer fintech\n", encoding="utf-8")
+    entry = JobListEntry(
+        id="86534",
+        title="System Engineer",
+        employer="Example Corp",
+        posting_date="2026-07-01",
+        application_deadline="2026-12-31",
+    )
+    detail = JobPostingDetail(
+        id="86534",
+        title="System Engineer",
+        employer="Example Corp",
+        posting_date="2026-07-01",
+        application_deadline="2026-12-31",
+        fields={"Job Description": "Build reliable systems in Python."},
+    )
+    evidence = [
+        EvidencePair(
+            job_excerpt="Build reliable systems in Python.",
+            candidate_excerpt="Platform engineer at Example",
+            role="supports Relevance",
+        )
+    ]
+    assistant = Assistant(
+        catalog_store=CatalogStore(tmp_path / "catalog.db"),
+        job_board=FakeJobBoardSession(
+            authenticated=True,
+            list_entries=[entry],
+            details={"86534": detail},
+        ),
+        master_cv=FakeMasterCvStore(),
+        llm_judge=FakeLlmJudge(
+            hard_constraint_outcome="pass",
+            hard_constraint_reason="No hard constraint violations",
+            preference="Strong",
+            preference_reason="Matches preferred domain",
+            relevance="Strong",
+            evidence=evidence,
+        ),
+        llm_cv_tailor=FakeLlmCvTailor(),
+        constraint_files=FakeConstraintFilesStore(),
+        crawl_pacer=FakeCrawlPacer(),
+    )
+    assistant.set_master_cv_path(str(cv_path))
+    assistant.set_hard_constraints_path(str(hc_path))
+    assistant.set_preferences_path(str(prefs_path))
+    assert assistant.run_crawl().stored_count == 1
+    assistant.rejudge_pending_assessments()
+
+    client = TestClient(create_app(assistant))
+    catalog = client.get("/")
+    assert 'href="/jobs/86534"' in catalog.text
+
+    response = client.get("/jobs/86534")
+    assert response.status_code == 200
+    assert "No hard constraint violations" in response.text
+    assert "Matches preferred domain" in response.text
+    assert "Build reliable systems in Python." in response.text
+    assert "Platform engineer at Example" in response.text
+    assert 'action="/jobs/86534/prepare"' in response.text
+    assert 'action="/jobs/86534/delete"' in response.text

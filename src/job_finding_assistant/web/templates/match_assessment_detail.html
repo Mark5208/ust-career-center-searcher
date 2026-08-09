@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Match Assessment — Job Finding Assistant</title>
+    <style>
+      :root {
+        --ink: #1a2332;
+        --muted: #5a6570;
+        --paper: #f3f6f8;
+        --line: #d5dde3;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse at top left, #e8eef3 0%, transparent 55%),
+          linear-gradient(180deg, #dfe8ee 0%, var(--paper) 40%, #eef2f4 100%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 48rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+      }
+      h1 {
+        font-size: 2rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.35rem;
+      }
+      h2 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin: 2rem 0 0.75rem;
+      }
+      p, li {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.95rem;
+        margin: 0 0 0.5rem;
+      }
+      .signal {
+        margin: 0 0 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--line);
+      }
+      .signal strong {
+        color: var(--ink);
+      }
+      .evidence {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .evidence li {
+        margin: 0 0 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--line);
+      }
+      .actions {
+        margin: 1.5rem 0 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+      nav a {
+        color: #5a6570;
+        text-decoration: none;
+        margin-right: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href="/">Assessment Summary</a>
+        <a href="/candidate">Candidate</a>
+        <a href="/crawl">Crawl</a>
+      </nav>
+      <h1>Match Assessment</h1>
+      <p class="meta">{{ summary.title }} — {{ summary.employer }}</p>
+      <p class="meta">
+        Listing: {{ summary.listing_status }} · Deadline: {{ summary.deadline_status }}
+      </p>
+      {% if llm_unavailable_reason %}
+      <p class="meta">{{ llm_unavailable_reason }}</p>
+      {% endif %}
+
+      {% if match_assessment %}
+      <div class="signal">
+        <p>
+          <strong>Hard Constraint:</strong> {{ match_assessment.hard_constraint_outcome }}
+        </p>
+        <p>{{ match_assessment.hard_constraint_reason }}</p>
+      </div>
+      <div class="signal">
+        <p>
+          <strong>Preference:</strong>
+          {{ match_assessment.preference or "unknown" }}
+        </p>
+        <p>{{ match_assessment.preference_reason }}</p>
+      </div>
+      <div class="signal">
+        <p><strong>Relevance:</strong> {{ match_assessment.relevance }}</p>
+      </div>
+
+      <h2>Relevance Evidence</h2>
+      {% if match_assessment.evidence %}
+      <ul class="evidence">
+        {% for pair in match_assessment.evidence %}
+        <li>
+          <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
+          <p><strong>Candidate Snapshot:</strong> {{ pair.candidate_excerpt }}</p>
+          <p>{{ pair.role }}</p>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No Relevance Evidence pairs.</p>
+      {% endif %}
+      {% else %}
+      <p class="meta">
+        Pending — Match Assessment is not ready yet. Prepare stays unavailable until
+        judging finishes (or LLM Unavailable is resolved).
+      </p>
+      {% endif %}
+
+      <div class="actions">
+        {% if can_prepare %}
+        <form method="post" action="/jobs/{{ summary.job_posting_id }}/prepare">
+          <button type="submit">Prepare</button>
+        </form>
+        {% else %}
+        <p class="meta">Prepare unavailable</p>
+        {% endif %}
+        <form method="post" action="/jobs/{{ summary.job_posting_id }}/delete">
+          <button type="submit">Delete</button>
+        </form>
+      </div>
+    </main>
+  </body>
+</html>
