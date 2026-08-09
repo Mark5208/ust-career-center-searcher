@@ -130,6 +130,9 @@ class Assistant:
         self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
         self._candidate_file_errors: list[str] = []
         self._llm_call_error: str | None = None
+        # Process-local: after llm_failed/skipped, do not retry the same Pending head
+        # until every other Pending id has been attempted (avoids HOL starvation).
+        self._rejudge_skip_ids: set[str] = set()
         store_root = packet_store_dir or catalog_store.db_path.parent / "packets"
         self._packet_store = PacketStore(store_root)
         self._pdf_renderer: PdfRenderer = pdf_renderer or RenderCvPdfRenderer()
@@ -450,22 +453,32 @@ class Assistant:
         return CrawlOutcome(status="completed", stored_count=stored_count)
 
     def rejudge_pending_assessments(self) -> None:
-        """Opportunistically judge Pending Match Assessments (after Crawl / file change)."""
+        """Opportunistically judge Pending Match Assessments (after Crawl / file change).
+
+        Budgets at most one Pending Job Posting per call so catalog GET / cannot block
+        on a full LLM batch (ADR-0015). Refresh again to continue the queue.
+
+        When a posting fails or is skipped, it is deferred for this process so later
+        Pending ids can still advance; after a full pass the deferred heads are retried.
+        """
         self.refresh_candidate_file_state()
         pending = self._catalog_store.list_pending_job_posting_ids()
         if not pending:
+            self._rejudge_skip_ids.clear()
             return
-        any_success = False
-        any_llm_failure = False
-        for job_posting_id in pending:
-            outcome = self._assess_job_posting(job_posting_id)
-            if outcome == "saved":
-                any_success = True
-            elif outcome == "llm_failed":
-                any_llm_failure = True
-        # Clear a prior call error only when this batch fully succeeded (no LLM failures).
-        if any_success and not any_llm_failure:
+        candidates = [job_id for job_id in pending if job_id not in self._rejudge_skip_ids]
+        if not candidates:
+            # Full pass completed with failures still Pending — retry from the head.
+            self._rejudge_skip_ids.clear()
+            candidates = list(pending)
+        job_id = candidates[0]
+        outcome = self._assess_job_posting(job_id)
+        if outcome == "saved":
             self._llm_call_error = None
+            self._rejudge_skip_ids.discard(job_id)
+        else:
+            # llm_failed / skipped: leave Pending, advance past this id next call.
+            self._rejudge_skip_ids.add(job_id)
 
     def refresh_candidate_file_state(self) -> None:
         """Detect Master CV / HC / Preferences content or path-clear changes.
@@ -512,6 +525,7 @@ class Assistant:
         if changed and had_prior:
             self._catalog_store.clear_all_match_assessments()
             self._packet_store.mark_all_stale()
+            self._rejudge_skip_ids.clear()
         if changed or not had_prior:
             self._catalog_store.save_candidate_fingerprints(**current)
 

@@ -46,7 +46,7 @@ Preference and Relevance call sites enforce input isolation (`judge_preference` 
 
 ### LLM runtime (ADR-0015)
 
-`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse/timeout failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). Opportunistic rejudge assesses at most one Pending posting per catalog load. No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
+`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse/timeout failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). Opportunistic rejudge assesses at most one Pending posting per catalog load and defers a failed/skipped head so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 

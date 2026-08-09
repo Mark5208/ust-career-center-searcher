@@ -1,0 +1,78 @@
+# Sample RenderCV Master CV for local Job Finding Assistant testing.
+# Point /candidate at this file's absolute path. The tool never overwrites it.
+#
+# yaml-language-server: $schema=https://raw.githubusercontent.com/rendercv/rendercv/refs/tags/v2.8/schema.json
+
+cv:
+  name: Alice Example
+  headline: Software Engineering Graduate
+  location: Hong Kong
+  email: alice.example@ust.hk
+  phone: "+852 9000 0000"
+  website: https://example.com/alice
+  social_networks:
+    - network: LinkedIn
+      username: alice-example
+    - network: GitHub
+      username: alice-example
+  sections:
+    education:
+      - institution: The Hong Kong University of Science and Technology
+        area: Computer Science
+        degree: BEng
+        start_date: 2020-09
+        end_date: "2024-06"
+        location: Hong Kong
+        highlights:
+          - "Focus: distributed systems and software engineering"
+          - "Relevant coursework: Operating Systems, Databases, Machine Learning"
+    experience:
+      - company: Acme Corp
+        position: Software Engineering Intern
+        start_date: 2023-06
+        end_date: 2023-08
+        location: Hong Kong
+        highlights:
+          - Built internal tooling in Python to automate weekly ops reports
+          - Improved API test coverage for a customer-facing service
+      - company: Campus Labs
+        position: Student Developer
+        start_date: 2022-09
+        end_date: 2023-05
+        location: HKUST
+        highlights:
+          - Maintained a small Flask service used by student societies
+          - Wrote SQLite-backed scripts for event registration data cleanup
+    projects:
+      - name: Campus Event Finder
+        start_date: 2023-01
+        end_date: 2023-05
+        summary: Web app for discovering campus events by interest and schedule
+        highlights:
+          - Implemented search and filter flows with a simple REST API
+          - Deployed a demo instance for club organizers
+      - name: Course Planner Helper
+        date: 2022
+        summary: CLI helper that suggests conflict-free course combinations
+        highlights:
+          - Parsed timetable CSVs and produced a printable plan
+    skills:
+      - label: Languages
+        details: Python, TypeScript, SQL, YAML
+      - label: Concepts
+        details: REST APIs, testing, basic distributed systems
+    tools:
+      - label: Stack
+        details: Git, SQLite, Docker, Linux
+      - label: Frameworks
+        details: FastAPI, Flask, React (basic)
+
+# Tool-only metadata (not a CV section). RenderCV should ignore this on PDF;
+# Candidate Snapshot must not treat it as education/experience/etc.
+assistant:
+  pinned_section_order:
+    - experience
+    - projects
+    - education
+    - skills
+    - tools

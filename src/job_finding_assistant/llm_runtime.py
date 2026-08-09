@@ -307,12 +307,13 @@ class OpenAiCompatibleLlmClient:
         base_url: str = DEFAULT_LLM_BASE_URL,
         model: str = DEFAULT_LLM_MODEL,
         http_client: httpx.Client | None = None,
-        timeout: float = 120.0,
+        timeout: float = 30.0,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._owns_client = http_client is None
+        self._timeout = timeout
         self._http = http_client or httpx.Client(timeout=timeout)
 
     @property
@@ -341,6 +342,8 @@ class OpenAiCompatibleLlmClient:
         }
         try:
             response = self._http.post(url, headers=headers, json=payload)
+        except httpx.TimeoutException as exc:
+            raise LlmUnavailableError("provider timed out") from exc
         except httpx.HTTPError as exc:
             raise LlmUnavailableError("provider request failed") from exc
 

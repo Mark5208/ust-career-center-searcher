@@ -1,5 +1,6 @@
 """In-memory fakes for Job Board / LLM / Master CV / constraint-file ports used in tests."""
 
+import time
 from pathlib import Path
 
 from job_finding_assistant.candidate_snapshot import (
@@ -204,6 +205,8 @@ class FakeLlmJudge:
         relevances: list[RelevanceBand] | None = None,
         evidence: list[EvidencePair] | None = None,
         fail_on_call: bool = False,
+        fail_for_titles: frozenset[str] | None = None,
+        delay_seconds: float = 0.0,
     ) -> None:
         self._available = available
         self._hard_constraint_outcome = hard_constraint_outcome
@@ -226,6 +229,8 @@ class FakeLlmJudge:
             ]
         )
         self._fail_on_call = fail_on_call
+        self._fail_for_titles = set(fail_for_titles or ())
+        self._delay_seconds = delay_seconds
         self.judge_calls = 0
         self.hard_constraint_calls: list[dict[str, object]] = []
         self.preference_calls: list[dict[str, object]] = []
@@ -239,14 +244,25 @@ class FakeLlmJudge:
             return None
         return "LLM Unavailable: Fake judge disabled"
 
+    def _maybe_delay(self) -> None:
+        if self._delay_seconds > 0:
+            time.sleep(self._delay_seconds)
+
+    def _should_fail(self, job_detail_fields: dict[str, str]) -> bool:
+        if not self._available or self._fail_on_call:
+            return True
+        title = str(job_detail_fields.get("title") or "")
+        return title in self._fail_for_titles
+
     def judge_hard_constraint(
         self,
         *,
         hard_constraints_text: str,
         job_detail_fields: dict[str, str],
     ) -> HardConstraintJudgment:
-        if not self._available or self._fail_on_call:
+        if self._should_fail(job_detail_fields):
             raise RuntimeError("FakeLlmJudge is not available")
+        self._maybe_delay()
         self.judge_calls += 1
         self.hard_constraint_calls.append(
             {
@@ -266,8 +282,9 @@ class FakeLlmJudge:
         preferences_text: str,
         job_detail_fields: dict[str, str],
     ) -> PreferenceJudgment:
-        if not self._available or self._fail_on_call:
+        if self._should_fail(job_detail_fields):
             raise RuntimeError("FakeLlmJudge is not available")
+        self._maybe_delay()
         self.judge_calls += 1
         self.preference_calls.append(
             {
@@ -292,8 +309,9 @@ class FakeLlmJudge:
         job_detail_fields: dict[str, str],
         candidate_snapshot: CandidateSnapshot,
     ) -> RelevanceJudgment:
-        if not self._available or self._fail_on_call:
+        if self._should_fail(job_detail_fields):
             raise RuntimeError("FakeLlmJudge is not available")
+        self._maybe_delay()
         self.judge_calls += 1
         self.relevance_calls.append(
             {
