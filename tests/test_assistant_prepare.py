@@ -243,8 +243,10 @@ def test_tailor_failure_leaves_prior_packet_untouched(tmp_path: Path) -> None:
     prior_yaml = first.tailored_yaml
 
     tailor._fail_on_call = True
-    with pytest.raises(PrepareFailedError):
+    with pytest.raises(PrepareFailedError) as failed:
         assistant.prepare("86534", confirm_overwrite=True)
+    assert str(failed.value) == "LLM Unavailable: Fake tailor failed"
+    assert assistant.get_llm_unavailable_reason() == "LLM Unavailable: Fake tailor failed"
 
     stored = assistant.get_preparation_packet("86534")
     assert stored is not None

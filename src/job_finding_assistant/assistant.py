@@ -14,6 +14,7 @@ from job_finding_assistant.constraint_files import fingerprint_path
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
+from job_finding_assistant.llm_runtime import LlmUnavailableError
 from job_finding_assistant.match_assessment import MatchAssessment
 from job_finding_assistant.packet_store import PacketStore
 from job_finding_assistant.pdf_renderer import PdfRenderError, RenderCvPdfRenderer
@@ -27,14 +28,6 @@ from job_finding_assistant.ports import (
     PdfRenderer,
 )
 from job_finding_assistant.preparation_packet import PreparationPacket
-
-
-def _llm_unavailable_message(exc: BaseException, *, fallback: str) -> str:
-    """Format a short non-secret LLM Unavailable reason from an exception."""
-    reason = str(exc).strip() or fallback
-    if not reason.lower().startswith("llm unavailable"):
-        return f"LLM Unavailable: {reason}"
-    return reason
 
 
 __all__ = [
@@ -249,9 +242,9 @@ class Assistant:
             )
 
         if not self._llm_cv_tailor.available():
-            reason = self._llm_cv_tailor.unavailable_reason() or "LLM Unavailable"
+            reason = self._llm_cv_tailor.unavailable_reason()
             self._llm_call_error = reason
-            raise PrepareFailedError(reason)
+            raise PrepareFailedError(reason if reason is not None else "LLM Unavailable")
 
         snapshot = self.get_candidate_snapshot()
         if snapshot is None:
@@ -286,10 +279,9 @@ class Assistant:
                 hard_constraint_outcome=assessment.hard_constraint_outcome,
                 hard_constraint_reason=assessment.hard_constraint_reason,
             )
-        except Exception as exc:
-            reason = _llm_unavailable_message(exc, fallback="LLM Unavailable: tailor failed")
-            self._llm_call_error = reason
-            raise PrepareFailedError(reason) from exc
+        except LlmUnavailableError as exc:
+            self._llm_call_error = exc.reason
+            raise PrepareFailedError(exc.reason) from exc
         self._llm_call_error = None
 
         pdf_bytes: bytes | None
@@ -400,11 +392,11 @@ class Assistant:
         return list(self._candidate_file_errors)
 
     def get_llm_unavailable_reason(self) -> str | None:
-        """Short non-secret reason when the live judge/tailor cannot run."""
+        """Pass through adapter preflight reason or last call-failure `.reason`."""
         if not self._llm_judge.available():
-            return self._llm_judge.unavailable_reason() or "LLM Unavailable"
+            return self._llm_judge.unavailable_reason()
         if not self._llm_cv_tailor.available():
-            return self._llm_cv_tailor.unavailable_reason() or "LLM Unavailable"
+            return self._llm_cv_tailor.unavailable_reason()
         return self._llm_call_error
 
     def get_crawl_filters(self) -> CrawlFilters:
@@ -647,9 +639,7 @@ class Assistant:
         needs_prefs_judge = prefs_read.non_empty
         # Relevance always required when Snapshot exists; HC/Prefs when non-empty.
         if not self._llm_judge.available():
-            self._llm_call_error = (
-                self._llm_judge.unavailable_reason() or "LLM Unavailable"
-            )
+            self._llm_call_error = self._llm_judge.unavailable_reason()
             return "llm_failed"
 
         try:
@@ -691,11 +681,9 @@ class Assistant:
                 job_detail_fields=job_fields,
                 candidate_snapshot=snapshot,
             )
-        except Exception as exc:  # noqa: BLE001 — any judge failure leaves Pending
+        except LlmUnavailableError as exc:
             # Judge failure → leave Pending (do not persist a half-assessed row).
-            self._llm_call_error = _llm_unavailable_message(
-                exc, fallback="LLM Unavailable: judge failed"
-            )
+            self._llm_call_error = exc.reason
             return "llm_failed"
 
         assessment = MatchAssessment(

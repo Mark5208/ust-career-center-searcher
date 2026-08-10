@@ -6,7 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 
@@ -74,6 +74,13 @@ class LlmUnavailableError(RuntimeError):
     def __init__(self, reason: str) -> None:
         self.reason = _sanitize_reason(reason)
         super().__init__(self.reason)
+
+
+def _guard_unexpected(exc: BaseException, *, fallback: str) -> NoReturn:
+    """Re-raise LlmUnavailableError; map anything else to a short safe reason."""
+    if isinstance(exc, LlmUnavailableError):
+        raise exc
+    raise LlmUnavailableError(fallback) from exc
 
 
 class UnavailableLlmJudge:
@@ -420,24 +427,27 @@ class OpenAiCompatibleLlmJudge:
         hard_constraints_text: str,
         job_detail_fields: dict[str, str],
     ) -> HardConstraintJudgment:
-        user = (
-            "Hard Constraints file:\n"
-            f"{hard_constraints_text}\n\n"
-            "Job Posting:\n"
-            f"{_format_job_fields(job_detail_fields)}\n"
-        )
-        data = self._client.complete_json(system=_HARD_CONSTRAINT_SYSTEM, user=user)
-        outcome = data.get("outcome")
-        if outcome not in ("pass", "fail", "unknown"):
-            raise LlmUnavailableError("invalid Hard Constraint outcome")
-        reason = str(data.get("reason") or "").strip()
-        if not reason:
-            raise LlmUnavailableError("missing Hard Constraint reason")
-        return HardConstraintJudgment(
-            outcome=outcome,
-            reason=reason,
-            evidence=_parse_evidence(data.get("evidence")),
-        )
+        try:
+            user = (
+                "Hard Constraints file:\n"
+                f"{hard_constraints_text}\n\n"
+                "Job Posting:\n"
+                f"{_format_job_fields(job_detail_fields)}\n"
+            )
+            data = self._client.complete_json(system=_HARD_CONSTRAINT_SYSTEM, user=user)
+            outcome = data.get("outcome")
+            if outcome not in ("pass", "fail", "unknown"):
+                raise LlmUnavailableError("invalid Hard Constraint outcome")
+            reason = str(data.get("reason") or "").strip()
+            if not reason:
+                raise LlmUnavailableError("missing Hard Constraint reason")
+            return HardConstraintJudgment(
+                outcome=outcome,
+                reason=reason,
+                evidence=_parse_evidence(data.get("evidence")),
+            )
+        except Exception as exc:
+            _guard_unexpected(exc, fallback="unexpected judge error")
 
     def judge_preference(
         self,
@@ -445,24 +455,27 @@ class OpenAiCompatibleLlmJudge:
         preferences_text: str,
         job_detail_fields: dict[str, str],
     ) -> PreferenceJudgment:
-        user = (
-            "Preferences file:\n"
-            f"{preferences_text}\n\n"
-            "Job Posting:\n"
-            f"{_format_job_fields(job_detail_fields)}\n"
-        )
-        data = self._client.complete_json(system=_PREFERENCE_SYSTEM, user=user)
-        preference = data.get("preference")
-        if preference not in ("Strong", "Mixed", "Weak"):
-            raise LlmUnavailableError("invalid Preference band")
-        reason = str(data.get("reason") or "").strip()
-        if not reason:
-            raise LlmUnavailableError("missing Preference reason")
-        return PreferenceJudgment(
-            preference=preference,
-            reason=reason,
-            evidence=_parse_evidence(data.get("evidence")),
-        )
+        try:
+            user = (
+                "Preferences file:\n"
+                f"{preferences_text}\n\n"
+                "Job Posting:\n"
+                f"{_format_job_fields(job_detail_fields)}\n"
+            )
+            data = self._client.complete_json(system=_PREFERENCE_SYSTEM, user=user)
+            preference = data.get("preference")
+            if preference not in ("Strong", "Mixed", "Weak"):
+                raise LlmUnavailableError("invalid Preference band")
+            reason = str(data.get("reason") or "").strip()
+            if not reason:
+                raise LlmUnavailableError("missing Preference reason")
+            return PreferenceJudgment(
+                preference=preference,
+                reason=reason,
+                evidence=_parse_evidence(data.get("evidence")),
+            )
+        except Exception as exc:
+            _guard_unexpected(exc, fallback="unexpected judge error")
 
     def judge_relevance(
         self,
@@ -470,20 +483,23 @@ class OpenAiCompatibleLlmJudge:
         job_detail_fields: dict[str, str],
         candidate_snapshot: CandidateSnapshot,
     ) -> RelevanceJudgment:
-        user = (
-            "Candidate Snapshot:\n"
-            f"{_format_snapshot(candidate_snapshot)}\n\n"
-            "Job Posting:\n"
-            f"{_format_job_fields(job_detail_fields)}\n"
-        )
-        data = self._client.complete_json(system=_RELEVANCE_SYSTEM, user=user)
-        relevance = data.get("relevance")
-        if relevance not in ("Strong", "Mixed", "Weak"):
-            raise LlmUnavailableError("invalid Relevance band")
-        evidence = _parse_evidence(data.get("evidence"))
-        if not evidence:
-            raise LlmUnavailableError("missing Relevance Evidence")
-        return RelevanceJudgment(relevance=relevance, evidence=evidence)
+        try:
+            user = (
+                "Candidate Snapshot:\n"
+                f"{_format_snapshot(candidate_snapshot)}\n\n"
+                "Job Posting:\n"
+                f"{_format_job_fields(job_detail_fields)}\n"
+            )
+            data = self._client.complete_json(system=_RELEVANCE_SYSTEM, user=user)
+            relevance = data.get("relevance")
+            if relevance not in ("Strong", "Mixed", "Weak"):
+                raise LlmUnavailableError("invalid Relevance band")
+            evidence = _parse_evidence(data.get("evidence"))
+            if not evidence:
+                raise LlmUnavailableError("missing Relevance Evidence")
+            return RelevanceJudgment(relevance=relevance, evidence=evidence)
+        except Exception as exc:
+            _guard_unexpected(exc, fallback="unexpected judge error")
 
 
 class OpenAiCompatibleLlmCvTailor:
@@ -508,31 +524,34 @@ class OpenAiCompatibleLlmCvTailor:
         hard_constraint_outcome: ConstraintOutcome,
         hard_constraint_reason: str,
     ) -> TailorResult:
-        evidence_lines = [
-            f"- job: {pair.job_excerpt} | candidate: {pair.candidate_excerpt} | role: {pair.role}"
-            for pair in relevance_evidence
-        ]
-        user = (
-            "Master CV YAML:\n"
-            f"{master_cv_yaml}\n\n"
-            "Candidate Snapshot:\n"
-            f"{_format_snapshot(candidate_snapshot)}\n\n"
-            "Job Posting:\n"
-            f"{_format_job_fields(job_detail_fields)}\n\n"
-            "Relevance Evidence:\n"
-            f"{chr(10).join(evidence_lines) if evidence_lines else '(none)'}\n\n"
-            f"Hard Constraint outcome: {hard_constraint_outcome}\n"
-            f"Hard Constraint reason: {hard_constraint_reason}\n"
-        )
-        data = self._client.complete_json(system=_TAILOR_SYSTEM, user=user)
-        tailored_yaml = data.get("tailored_yaml")
-        if not isinstance(tailored_yaml, str) or not tailored_yaml.strip():
-            raise LlmUnavailableError("missing Tailored YAML")
-        return TailorResult(
-            gap_report=_parse_gap_report(data.get("gap_report")),
-            edit_summary=_parse_edit_summary(data.get("edit_summary")),
-            tailored_yaml=tailored_yaml,
-        )
+        try:
+            evidence_lines = [
+                f"- job: {pair.job_excerpt} | candidate: {pair.candidate_excerpt} | role: {pair.role}"
+                for pair in relevance_evidence
+            ]
+            user = (
+                "Master CV YAML:\n"
+                f"{master_cv_yaml}\n\n"
+                "Candidate Snapshot:\n"
+                f"{_format_snapshot(candidate_snapshot)}\n\n"
+                "Job Posting:\n"
+                f"{_format_job_fields(job_detail_fields)}\n\n"
+                "Relevance Evidence:\n"
+                f"{chr(10).join(evidence_lines) if evidence_lines else '(none)'}\n\n"
+                f"Hard Constraint outcome: {hard_constraint_outcome}\n"
+                f"Hard Constraint reason: {hard_constraint_reason}\n"
+            )
+            data = self._client.complete_json(system=_TAILOR_SYSTEM, user=user)
+            tailored_yaml = data.get("tailored_yaml")
+            if not isinstance(tailored_yaml, str) or not tailored_yaml.strip():
+                raise LlmUnavailableError("missing Tailored YAML")
+            return TailorResult(
+                gap_report=_parse_gap_report(data.get("gap_report")),
+                edit_summary=_parse_edit_summary(data.get("edit_summary")),
+                tailored_yaml=tailored_yaml,
+            )
+        except Exception as exc:
+            _guard_unexpected(exc, fallback="unexpected tailor error")
 
 
 def _parse_gap_report(raw: Any) -> GapReport:

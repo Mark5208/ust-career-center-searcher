@@ -288,6 +288,48 @@ def test_provider_http_error_is_llm_unavailable_without_leaking_key() -> None:
     assert "sk-abcdef" not in str(err.value)
 
 
+def test_unexpected_judge_error_maps_to_safe_llm_unavailable() -> None:
+    class _BoomClient:
+        model = "x"
+
+        def complete_json(self, *, system: str, user: str) -> dict[str, Any]:
+            del system, user
+            raise RuntimeError("internal boom with sk-abcdef1234567890token")
+
+    judge = OpenAiCompatibleLlmJudge(_BoomClient())  # type: ignore[arg-type]
+    with pytest.raises(LlmUnavailableError) as err:
+        judge.judge_relevance(
+            job_detail_fields={"title": "SWE"},
+            candidate_snapshot=_snapshot(),
+        )
+    assert err.value.reason == "LLM Unavailable: unexpected judge error"
+    assert "sk-abcdef" not in err.value.reason
+    assert err.value.__cause__ is not None
+    assert "internal boom" in str(err.value.__cause__)
+
+
+def test_unexpected_tailor_error_maps_to_safe_llm_unavailable() -> None:
+    class _BoomClient:
+        model = "x"
+
+        def complete_json(self, *, system: str, user: str) -> dict[str, Any]:
+            del system, user
+            raise RuntimeError("tailor internal boom")
+
+    tailor = OpenAiCompatibleLlmCvTailor(_BoomClient())  # type: ignore[arg-type]
+    with pytest.raises(LlmUnavailableError) as err:
+        tailor.tailor(
+            master_cv_yaml="cv:\n  name: Ada\n",
+            candidate_snapshot=_snapshot(),
+            job_detail_fields={"title": "SWE"},
+            relevance_evidence=[],
+            hard_constraint_outcome="unknown",
+            hard_constraint_reason="empty",
+        )
+    assert err.value.reason == "LLM Unavailable: unexpected tailor error"
+    assert err.value.__cause__ is not None
+
+
 def test_tailor_parses_packet_and_omits_preferences_from_request() -> None:
     captured: dict[str, Any] = {}
 
@@ -346,6 +388,36 @@ def test_tailor_parses_packet_and_omits_preferences_from_request() -> None:
     user = captured["body"]["messages"][1]["content"]
     assert "Master CV YAML" in user
     assert "Preferences" not in user
+
+
+def test_fake_judge_and_tailor_fail_only_with_llm_unavailable_error() -> None:
+    judge = FakeLlmJudge(available=False)
+    with pytest.raises(LlmUnavailableError) as judge_err:
+        judge.judge_relevance(
+            job_detail_fields={"title": "SWE"},
+            candidate_snapshot=_snapshot(),
+        )
+    assert judge_err.value.reason == "LLM Unavailable: Fake judge disabled"
+
+    failing_judge = FakeLlmJudge(fail_on_call=True)
+    with pytest.raises(LlmUnavailableError) as call_err:
+        failing_judge.judge_hard_constraint(
+            hard_constraints_text="Must be remote",
+            job_detail_fields={"title": "SWE"},
+        )
+    assert call_err.value.reason == "LLM Unavailable: Fake judge failed"
+
+    tailor = FakeLlmCvTailor(fail_on_call=True)
+    with pytest.raises(LlmUnavailableError) as tailor_err:
+        tailor.tailor(
+            master_cv_yaml="cv:\n  name: Ada\n",
+            candidate_snapshot=_snapshot(),
+            job_detail_fields={"title": "SWE"},
+            relevance_evidence=[],
+            hard_constraint_outcome="unknown",
+            hard_constraint_reason="empty",
+        )
+    assert tailor_err.value.reason == "LLM Unavailable: Fake tailor failed"
 
 
 def test_judge_and_tailor_share_one_model_from_build_llm_ports() -> None:
