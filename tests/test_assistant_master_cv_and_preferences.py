@@ -53,6 +53,42 @@ def _assistant(
     )
 
 
+def test_assistant_get_candidate_files_returns_paths_snapshot_and_errors(
+    tmp_path: Path,
+) -> None:
+    master_cv_path = tmp_path / "master_CV.yaml"
+    master_cv_path.write_text(_SAMPLE_MASTER_CV, encoding="utf-8")
+    hc_path = tmp_path / "hard.txt"
+    prefs_path = tmp_path / "prefs.txt"
+    hc_path.write_text("Hong Kong only\n", encoding="utf-8")
+    prefs_path.write_text("Prefer fintech\n", encoding="utf-8")
+    assistant = _assistant(tmp_path)
+
+    assistant.set_master_cv_path(str(master_cv_path))
+    assistant.set_hard_constraints_path(str(hc_path))
+    assistant.set_preferences_path(str(prefs_path))
+
+    view = assistant.get_candidate_files()
+
+    assert view.master_cv_path == str(master_cv_path.resolve())
+    assert view.hard_constraints_path == str(hc_path.resolve())
+    assert view.preferences_path == str(prefs_path.resolve())
+    assert view.snapshot is not None
+    assert view.snapshot.contact == "Alice Example, alice@example.com"
+    assert view.errors == []
+
+
+def test_assistant_does_not_expose_legacy_candidate_file_getters() -> None:
+    for name in (
+        "get_master_cv_path",
+        "get_hard_constraints_path",
+        "get_preferences_path",
+        "get_candidate_snapshot",
+        "get_candidate_file_errors",
+    ):
+        assert not hasattr(Assistant, name)
+
+
 def test_assistant_sets_master_cv_path_without_overwriting_file(tmp_path: Path) -> None:
     master_cv_path = tmp_path / "master_CV.yaml"
     original = "cv:\n  name: Original Master CV\n"
@@ -61,7 +97,7 @@ def test_assistant_sets_master_cv_path_without_overwriting_file(tmp_path: Path) 
 
     assistant.set_master_cv_path(str(master_cv_path))
 
-    assert assistant.get_master_cv_path() == str(master_cv_path.resolve())
+    assert assistant.get_candidate_files().master_cv_path == str(master_cv_path.resolve())
     assert master_cv_path.read_text(encoding="utf-8") == original
 
 
@@ -71,7 +107,7 @@ def test_assistant_builds_candidate_snapshot_from_master_cv(tmp_path: Path) -> N
     assistant = _assistant(tmp_path)
 
     assistant.set_master_cv_path(str(master_cv_path))
-    snapshot = assistant.get_candidate_snapshot()
+    snapshot = assistant.get_candidate_files().snapshot
 
     assert snapshot is not None
     assert snapshot.contact == "Alice Example, alice@example.com"
@@ -102,7 +138,7 @@ cv:
     assistant = _assistant(tmp_path)
 
     assistant.set_master_cv_path(str(master_cv_path))
-    snapshot = assistant.get_candidate_snapshot()
+    snapshot = assistant.get_candidate_files().snapshot
 
     assert snapshot is not None
     assert snapshot.skills_tools == ["Languages: Python, YAML", "Stack: SQLite, Git"]
@@ -115,15 +151,15 @@ def test_assistant_rebuilds_candidate_snapshot_when_master_cv_changes(
     master_cv_path.write_text(_SAMPLE_MASTER_CV, encoding="utf-8")
     assistant = _assistant(tmp_path)
     assistant.set_master_cv_path(str(master_cv_path))
-    assert assistant.get_candidate_snapshot() is not None
-    assert assistant.get_candidate_snapshot().skills_tools == [
+    assert assistant.get_candidate_files().snapshot is not None
+    assert assistant.get_candidate_files().snapshot.skills_tools == [
         "Languages: Python, YAML, SQLite"
     ]
 
     updated = _SAMPLE_MASTER_CV.replace("Python, YAML, SQLite", "Rust, Go")
     master_cv_path.write_text(updated, encoding="utf-8")
 
-    snapshot = assistant.get_candidate_snapshot()
+    snapshot = assistant.get_candidate_files().snapshot
 
     assert snapshot is not None
     assert snapshot.skills_tools == ["Languages: Rust, Go"]
@@ -137,7 +173,7 @@ def test_invalid_master_cv_yaml_yields_no_snapshot(tmp_path: Path) -> None:
 
     assistant.set_master_cv_path(str(master_cv_path))
 
-    assert assistant.get_candidate_snapshot() is None
+    assert assistant.get_candidate_files().snapshot is None
     assert master_cv_path.read_text(encoding="utf-8").startswith("cv: [")
 
 
@@ -153,14 +189,15 @@ def test_assistant_sets_constraint_file_paths_without_overwriting(tmp_path: Path
     assistant.set_hard_constraints_path(str(hc_path))
     assistant.set_preferences_path(str(prefs_path))
 
-    assert assistant.get_hard_constraints_path() == str(hc_path.resolve())
-    assert assistant.get_preferences_path() == str(prefs_path.resolve())
+    files = assistant.get_candidate_files()
+    assert files.hard_constraints_path == str(hc_path.resolve())
+    assert files.preferences_path == str(prefs_path.resolve())
     assert hc_path.read_text(encoding="utf-8") == hc_body
     assert prefs_path.read_text(encoding="utf-8") == prefs_body
 
-    reloaded = _assistant(tmp_path)
-    assert reloaded.get_hard_constraints_path() == str(hc_path.resolve())
-    assert reloaded.get_preferences_path() == str(prefs_path.resolve())
+    reloaded = _assistant(tmp_path).get_candidate_files()
+    assert reloaded.hard_constraints_path == str(hc_path.resolve())
+    assert reloaded.preferences_path == str(prefs_path.resolve())
 
 
 def test_assistant_clears_constraint_file_paths(tmp_path: Path) -> None:
@@ -168,11 +205,12 @@ def test_assistant_clears_constraint_file_paths(tmp_path: Path) -> None:
     hc_path.write_text("Remote only\n", encoding="utf-8")
     assistant = _assistant(tmp_path)
     assistant.set_hard_constraints_path(str(hc_path))
-    assert assistant.get_hard_constraints_path() is not None
+    assert assistant.get_candidate_files().hard_constraints_path is not None
 
     assistant.clear_hard_constraints_path()
     assistant.clear_preferences_path()
 
-    assert assistant.get_hard_constraints_path() is None
-    assert assistant.get_preferences_path() is None
+    files = assistant.get_candidate_files()
+    assert files.hard_constraints_path is None
+    assert files.preferences_path is None
     assert hc_path.read_text(encoding="utf-8") == "Remote only\n"

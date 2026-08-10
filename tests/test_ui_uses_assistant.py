@@ -9,6 +9,7 @@ from job_finding_assistant.assistant import (
     AssessmentSummaryCatalog,
     AssessmentSummaryCatalogRow,
     Assistant,
+    CandidateFilesView,
     CrawlFilters,
     CrawlOutcome,
     DeleteNeedsConfirm,
@@ -19,7 +20,6 @@ from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.fakes import (
     FakeConstraintFilesStore,
-    FakeCrawlPacer,
     FakeJobBoardSession,
     FakeLlmCvTailor,
     FakeLlmJudge,
@@ -169,18 +169,18 @@ class _RecordingAssistant:
     def rejudge_pending_assessments(self) -> None:
         self.rejudge_calls += 1
 
-    def get_master_cv_path(self) -> str | None:
-        return self.master_cv_path
+    def get_candidate_files(self) -> CandidateFilesView:
+        return CandidateFilesView(
+            master_cv_path=self.master_cv_path,
+            hard_constraints_path=self.hard_constraints_path,
+            preferences_path=self.preferences_path,
+            snapshot=self.snapshot,
+            errors=list(self.candidate_file_errors),
+        )
 
     def set_master_cv_path(self, path: str) -> None:
         self.set_master_cv_calls.append(path)
         self.master_cv_path = path
-
-    def get_candidate_snapshot(self) -> CandidateSnapshot | None:
-        return self.snapshot
-
-    def get_hard_constraints_path(self) -> str | None:
-        return self.hard_constraints_path
 
     def set_hard_constraints_path(self, path: str) -> None:
         self.set_hard_constraints_calls.append(path)
@@ -190,9 +190,6 @@ class _RecordingAssistant:
         self.clear_hard_constraints_calls += 1
         self.hard_constraints_path = None
 
-    def get_preferences_path(self) -> str | None:
-        return self.preferences_path
-
     def set_preferences_path(self, path: str) -> None:
         self.set_preferences_calls.append(path)
         self.preferences_path = path
@@ -200,9 +197,6 @@ class _RecordingAssistant:
     def clear_preferences_path(self) -> None:
         self.clear_preferences_calls += 1
         self.preferences_path = None
-
-    def get_candidate_file_errors(self) -> list[str]:
-        return list(self.candidate_file_errors)
 
     def get_llm_unavailable_reason(self) -> str | None:
         return self.llm_unavailable_reason
@@ -390,7 +384,6 @@ def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
         llm_judge=judge,
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
     )
     assistant.set_master_cv_path(str(cv_path))
     assistant.run_crawl()
@@ -484,9 +477,10 @@ cv:
     assert path_response.status_code == 303
     assert hc_response.status_code == 303
     assert prefs_response.status_code == 303
-    assert assistant.get_master_cv_path() == str(master_cv_path.resolve())
-    assert assistant.get_hard_constraints_path() == str(hc_path.resolve())
-    assert assistant.get_preferences_path() == str(prefs_path.resolve())
+    files = assistant.get_candidate_files()
+    assert files.master_cv_path == str(master_cv_path.resolve())
+    assert files.hard_constraints_path == str(hc_path.resolve())
+    assert files.preferences_path == str(prefs_path.resolve())
     assert "details: Python" in master_cv_path.read_text(encoding="utf-8")
     assert hc_path.read_text(encoding="utf-8") == "Hong Kong only\n"
     page = client.get("/candidate")
@@ -1014,7 +1008,6 @@ def test_match_assessment_detail_with_wired_assistant_shows_evidence(
         ),
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
     )
     assistant.set_master_cv_path(str(cv_path))
     assistant.set_hard_constraints_path(str(hc_path))

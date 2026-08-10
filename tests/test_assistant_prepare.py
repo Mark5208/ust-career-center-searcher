@@ -13,7 +13,6 @@ from job_finding_assistant.assistant import (
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.fakes import (
     FakeConstraintFilesStore,
-    FakeCrawlPacer,
     FakeJobBoardSession,
     FakeLlmCvTailor,
     FakeLlmJudge,
@@ -122,7 +121,6 @@ def _ready_assistant(
         llm_judge=llm_judge or FakeLlmJudge(relevance="Strong"),
         llm_cv_tailor=tailor,
         constraint_files=constraint_files or FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
         packet_store_dir=tmp_path / "packets",
         pdf_renderer=renderer,
     )
@@ -173,7 +171,6 @@ def test_prepare_blocked_while_pending(tmp_path: Path) -> None:
         llm_judge=FakeLlmJudge(relevance="Strong"),
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
         packet_store_dir=tmp_path / "packets",
         pdf_renderer=FakePdfRenderer(),
     )
@@ -345,7 +342,6 @@ def test_crawl_detail_change_does_not_stale_packet(tmp_path: Path) -> None:
         llm_judge=FakeLlmJudge(relevance="Strong"),
         llm_cv_tailor=tailor,
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
         packet_store_dir=tmp_path / "packets",
         pdf_renderer=FakePdfRenderer(),
     )

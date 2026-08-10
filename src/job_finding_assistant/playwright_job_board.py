@@ -117,6 +117,7 @@ class PlaywrightJobBoardSession:
             assert self._context is not None
             if not self._is_authenticated_on_worker():
                 raise AuthLostError("Job Board session is not authenticated")
+            self._crawl_pacer.pause_before_detail()
             detail = self._context.new_page()
             try:
                 detail.goto(

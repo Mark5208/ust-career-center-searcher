@@ -10,7 +10,9 @@ from job_finding_assistant.candidate_snapshot import (
 )
 from job_finding_assistant.constraint_files import ConstraintFileRead, read_constraint_file
 from job_finding_assistant.crawl_filters import CrawlFilters
+from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
+from job_finding_assistant.ports import CrawlPacer
 from job_finding_assistant.llm_runtime import LlmUnavailableError
 from job_finding_assistant.match_assessment import (
     ConstraintOutcome,
@@ -59,11 +61,13 @@ class FakeJobBoardSession:
         list_entries: list[JobListEntry] | None = None,
         details: dict[str, JobPostingDetail] | None = None,
         auth_lost_after_details: int | None = None,
+        crawl_pacer: CrawlPacer | None = None,
     ) -> None:
         self._authenticated = authenticated
         self._list_entries = list(list_entries or [])
         self._details = dict(details or {})
         self._auth_lost_after_details = auth_lost_after_details
+        self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
         self._details_fetched = 0
         self.open_login_calls = 0
         self.discover_calls = 0
@@ -95,6 +99,7 @@ class FakeJobBoardSession:
     def fetch_job_detail(self, job_posting_id: str) -> JobPostingDetail:
         if not self._authenticated:
             raise AuthLostError("not authenticated")
+        self._crawl_pacer.pause_before_detail()
         if (
             self._auth_lost_after_details is not None
             and self._details_fetched >= self._auth_lost_after_details

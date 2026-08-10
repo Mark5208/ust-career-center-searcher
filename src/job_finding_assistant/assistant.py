@@ -12,7 +12,6 @@ from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files import fingerprint_path
 from job_finding_assistant.crawl_filters import CrawlFilters
-from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
 from job_finding_assistant.llm_runtime import LlmUnavailableError
 from job_finding_assistant.match_assessment import MatchAssessment
@@ -20,7 +19,6 @@ from job_finding_assistant.packet_store import PacketStore
 from job_finding_assistant.pdf_renderer import PdfRenderError, RenderCvPdfRenderer
 from job_finding_assistant.ports import (
     ConstraintFilesStore,
-    CrawlPacer,
     JobBoardSession,
     LlmCvTailor,
     LlmJudge,
@@ -112,6 +110,17 @@ class AssessmentSummaryCatalog:
     llm_unavailable_reason: str | None
 
 
+@dataclass(frozen=True)
+class CandidateFilesView:
+    """Read model for Master CV / Hard Constraints / Preferences paths + Snapshot."""
+
+    master_cv_path: str | None
+    hard_constraints_path: str | None
+    preferences_path: str | None
+    snapshot: CandidateSnapshot | None
+    errors: list[str]
+
+
 # Assessment Summary GET / may process this many Pending heads per catalog load.
 _CATALOG_REJUDGE_BUDGET = 5
 
@@ -132,7 +141,6 @@ class Assistant:
         llm_judge: LlmJudge,
         llm_cv_tailor: LlmCvTailor,
         constraint_files: ConstraintFilesStore,
-        crawl_pacer: CrawlPacer | None = None,
         packet_store_dir: Path | None = None,
         pdf_renderer: PdfRenderer | None = None,
     ) -> None:
@@ -142,7 +150,6 @@ class Assistant:
         self._llm_judge = llm_judge
         self._llm_cv_tailor = llm_cv_tailor
         self._constraint_files = constraint_files
-        self._crawl_pacer = crawl_pacer or NoOpCrawlPacer()
         self._candidate_file_errors: list[str] = []
         self._llm_call_error: str | None = None
         # Process-local: after llm_failed/skipped, do not retry the same Pending head
@@ -246,7 +253,7 @@ class Assistant:
             self._llm_call_error = reason
             raise PrepareFailedError(reason if reason is not None else "LLM Unavailable")
 
-        snapshot = self.get_candidate_snapshot()
+        snapshot = self._master_cv.candidate_snapshot()
         if snapshot is None:
             raise PrepareFailedError(
                 "Master CV / Candidate Snapshot is required to Prepare"
@@ -350,17 +357,16 @@ class Assistant:
         self._master_cv.set_master_cv_path(path)
         self._refresh_candidate_file_state()
 
-    def get_master_cv_path(self) -> str | None:
-        """Return the configured Master CV path, if any."""
-        return self._master_cv.master_cv_path()
-
-    def get_candidate_snapshot(self) -> CandidateSnapshot | None:
-        """Return the inspectable Candidate Snapshot (not hand-editable)."""
-        return self._master_cv.candidate_snapshot()
-
-    def get_hard_constraints_path(self) -> str | None:
-        """Return the configured Hard Constraints file path, if any."""
-        return self._constraint_files.hard_constraints_path()
+    def get_candidate_files(self) -> CandidateFilesView:
+        """Return paths, Candidate Snapshot, and path/read errors for candidate files."""
+        self._refresh_candidate_file_state()
+        return CandidateFilesView(
+            master_cv_path=self._master_cv.master_cv_path(),
+            hard_constraints_path=self._constraint_files.hard_constraints_path(),
+            preferences_path=self._constraint_files.preferences_path(),
+            snapshot=self._master_cv.candidate_snapshot(),
+            errors=list(self._candidate_file_errors),
+        )
 
     def set_hard_constraints_path(self, path: str) -> None:
         """Point at a Hard Constraints plain-text file; never overwrites that file."""
@@ -372,10 +378,6 @@ class Assistant:
         self._constraint_files.clear_hard_constraints_path()
         self._refresh_candidate_file_state()
 
-    def get_preferences_path(self) -> str | None:
-        """Return the configured Preferences file path, if any."""
-        return self._constraint_files.preferences_path()
-
     def set_preferences_path(self, path: str) -> None:
         """Point at a Preferences plain-text file; never overwrites that file."""
         self._constraint_files.set_preferences_path(path)
@@ -385,11 +387,6 @@ class Assistant:
         """Clear the Preferences path (counts as a candidate-file change)."""
         self._constraint_files.clear_preferences_path()
         self._refresh_candidate_file_state()
-
-    def get_candidate_file_errors(self) -> list[str]:
-        """Return path/read errors for Master CV / Hard Constraints / Preferences."""
-        self._refresh_candidate_file_state()
-        return list(self._candidate_file_errors)
 
     def get_llm_unavailable_reason(self) -> str | None:
         """Pass through adapter preflight reason or last call-failure `.reason`."""
@@ -449,7 +446,6 @@ class Assistant:
                     if existing.get("listing_status") != "Open":
                         self._catalog_store.set_listing_status(entry.id, "Open")
                     continue
-                self._crawl_pacer.pause_before_detail()
                 detail = self._job_board.fetch_job_detail(entry.id)
                 self._catalog_store.upsert_job_posting(
                     job_posting_id=detail.id,
@@ -627,7 +623,7 @@ class Assistant:
             "employer": employer,
         }
 
-        snapshot = self.get_candidate_snapshot()
+        snapshot = self._master_cv.candidate_snapshot()
         if snapshot is None:
             # Relevance requires a usable Master CV / Snapshot → stay Pending.
             return "skipped"

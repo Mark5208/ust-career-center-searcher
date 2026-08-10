@@ -8,7 +8,6 @@ from job_finding_assistant.assistant import Assistant, DeleteNeedsConfirm
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.fakes import (
     FakeConstraintFilesStore,
-    FakeCrawlPacer,
     FakeJobBoardSession,
     FakeLlmCvTailor,
     FakeLlmJudge,
@@ -103,7 +102,6 @@ def _ready_assistant(tmp_path: Path) -> Assistant:
         llm_judge=FakeLlmJudge(relevance="Strong"),
         llm_cv_tailor=tailor,
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
         packet_store_dir=tmp_path / "packets",
         pdf_renderer=FakePdfRenderer(pdf_bytes=b"%PDF-1.4 fake"),
     )
@@ -176,7 +174,6 @@ def test_delete_while_pending_removes_posting(tmp_path: Path) -> None:
         llm_judge=FakeLlmJudge(available=False),
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
         packet_store_dir=tmp_path / "packets",
         pdf_renderer=FakePdfRenderer(),
     )
