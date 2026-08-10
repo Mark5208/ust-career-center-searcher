@@ -696,6 +696,20 @@ def test_match_assessment_detail_page_uses_assistant_and_shows_signals() -> None
                 role="weakens Relevance",
             ),
         ],
+        hard_constraint_evidence=[
+            EvidencePair(
+                job_excerpt="Work Location: Singapore",
+                candidate_excerpt="Hong Kong only",
+                role="violates Hard Constraint",
+            )
+        ],
+        preference_evidence=[
+            EvidencePair(
+                job_excerpt="General IT support",
+                candidate_excerpt="Prefer fintech",
+                role="weakens Preference",
+            )
+        ],
     )
     client = TestClient(create_app(assistant))
 
@@ -710,12 +724,22 @@ def test_match_assessment_detail_page_uses_assistant_and_shows_signals() -> None
     assert "Hard Constraint" in response.text
     assert "fail" in response.text
     assert "Requires relocation outside Hong Kong" in response.text
+    assert "Hard Constraint Evidence" in response.text
+    assert "Work Location: Singapore" in response.text
+    assert "Hard Constraints file" in response.text
+    assert "Hong Kong only" in response.text
     assert "Preference" in response.text
     assert "Mixed" in response.text
     assert "Fintech preferred but role is general IT" in response.text
+    assert "Preference Evidence" in response.text
+    assert "General IT support" in response.text
+    assert "Preferences file" in response.text
+    assert "Prefer fintech" in response.text
     assert "Relevance" in response.text
     assert "Strong" in response.text
+    assert "Relevance Evidence" in response.text
     assert "Python platform work" in response.text
+    assert "Candidate Snapshot" in response.text
     assert "Platform engineer at Example" in response.text
     assert "supports Relevance" in response.text
     assert "On-call rotation" in response.text
@@ -723,6 +747,165 @@ def test_match_assessment_detail_page_uses_assistant_and_shows_signals() -> None
     assert 'action="/jobs/86534/delete"' in response.text
     assert "Override" not in response.text
     assert "accordion" not in response.text.lower()
+
+
+def test_match_assessment_detail_shows_empty_evidence_states() -> None:
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="pass",
+            preference=None,
+            relevance="Strong",
+        )
+    ]
+    assistant.match_assessments["86534"] = MatchAssessment(
+        job_posting_id="86534",
+        hard_constraint_outcome="pass",
+        hard_constraint_reason="No hard constraint violations",
+        preference=None,
+        preference_reason="No Preferences file or file is empty",
+        relevance="Strong",
+        evidence=[],
+        hard_constraint_evidence=[],
+        preference_evidence=[],
+    )
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/jobs/86534")
+
+    assert response.status_code == 200
+    assert "No Hard Constraint Evidence pairs." in response.text
+    assert "No Preference Evidence pairs." in response.text
+    assert "No Relevance Evidence pairs." in response.text
+
+
+def test_assessment_summary_stays_bands_only_without_evidence_lists() -> None:
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="fail",
+            preference="Mixed",
+            relevance="Strong",
+        )
+    ]
+    assistant.match_assessments["86534"] = MatchAssessment(
+        job_posting_id="86534",
+        hard_constraint_outcome="fail",
+        hard_constraint_reason="Requires relocation outside Hong Kong",
+        preference="Mixed",
+        preference_reason="Fintech preferred but role is general IT",
+        relevance="Strong",
+        evidence=[
+            EvidencePair(
+                job_excerpt="Python platform work",
+                candidate_excerpt="Platform engineer at Example",
+                role="supports Relevance",
+            )
+        ],
+        hard_constraint_evidence=[
+            EvidencePair(
+                job_excerpt="Work Location: Singapore",
+                candidate_excerpt="Hong Kong only",
+                role="violates Hard Constraint",
+            )
+        ],
+        preference_evidence=[
+            EvidencePair(
+                job_excerpt="General IT support",
+                candidate_excerpt="Prefer fintech",
+                role="weakens Preference",
+            )
+        ],
+    )
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Hard Constraint: fail" in response.text
+    assert "Preference: Mixed" in response.text
+    assert "Relevance: Strong" in response.text
+    assert "Hard Constraint Evidence" not in response.text
+    assert "Preference Evidence" not in response.text
+    assert "Relevance Evidence" not in response.text
+    assert "Hard Constraints file" not in response.text
+    assert "Preferences file" not in response.text
+    assert "Candidate Snapshot" not in response.text
+    assert "Work Location: Singapore" not in response.text
+    assert "Python platform work" not in response.text
+    assert assistant.get_match_assessment_calls == []
+
+
+def test_preparation_packet_keeps_compact_assessment_strip_with_link() -> None:
+    assistant = _RecordingAssistant()
+    assessment = MatchAssessment(
+        job_posting_id="86534",
+        hard_constraint_outcome="fail",
+        hard_constraint_reason="Requires relocation outside Hong Kong",
+        preference="Mixed",
+        preference_reason="Fintech preferred but role is general IT",
+        relevance="Strong",
+        evidence=[
+            EvidencePair(
+                job_excerpt="Python platform work",
+                candidate_excerpt="Platform engineer at Example",
+                role="supports Relevance",
+            )
+        ],
+        hard_constraint_evidence=[
+            EvidencePair(
+                job_excerpt="Work Location: Singapore",
+                candidate_excerpt="Hong Kong only",
+                role="violates Hard Constraint",
+            )
+        ],
+        preference_evidence=[
+            EvidencePair(
+                job_excerpt="General IT support",
+                candidate_excerpt="Prefer fintech",
+                role="weakens Preference",
+            )
+        ],
+    )
+    assistant.packet_views["86534"] = PreparationPacketView(
+        packet=PreparationPacket(
+            job_posting_id="86534",
+            gap_report=GapReport(),
+            edit_summary=EditSummary(),
+            tailored_yaml="cv:\n  name: Tailored\n",
+            pdf_bytes=b"%PDF-1.4",
+        ),
+        match_assessment=assessment,
+    )
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/jobs/86534/packet")
+
+    assert response.status_code == 200
+    assert "Current Match Assessment" in response.text
+    assert "Hard Constraint: fail" in response.text
+    assert "Requires relocation outside Hong Kong" in response.text
+    assert "Preference: Mixed" in response.text
+    assert "Fintech preferred but role is general IT" in response.text
+    assert "Relevance: Strong" in response.text
+    assert 'href="/jobs/86534"' in response.text
+    assert "Hard Constraint Evidence" not in response.text
+    assert "Preference Evidence" not in response.text
+    assert "Relevance Evidence" not in response.text
+    assert "Work Location: Singapore" not in response.text
+    assert "Python platform work" not in response.text
 
 
 def test_match_assessment_detail_pending_blocks_prepare_and_shows_clear_state() -> None:
@@ -797,6 +980,20 @@ def test_match_assessment_detail_with_wired_assistant_shows_evidence(
             role="supports Relevance",
         )
     ]
+    hc_evidence = [
+        EvidencePair(
+            job_excerpt="Work Location: Hong Kong",
+            candidate_excerpt="Hong Kong only",
+            role="supports Hard Constraint",
+        )
+    ]
+    preference_evidence = [
+        EvidencePair(
+            job_excerpt="Fintech product team",
+            candidate_excerpt="Prefer fintech",
+            role="supports Preference",
+        )
+    ]
     assistant = Assistant(
         catalog_store=CatalogStore(tmp_path / "catalog.db"),
         job_board=FakeJobBoardSession(
@@ -808,8 +1005,10 @@ def test_match_assessment_detail_with_wired_assistant_shows_evidence(
         llm_judge=FakeLlmJudge(
             hard_constraint_outcome="pass",
             hard_constraint_reason="No hard constraint violations",
+            hard_constraint_evidence=hc_evidence,
             preference="Strong",
             preference_reason="Matches preferred domain",
+            preference_evidence=preference_evidence,
             relevance="Strong",
             evidence=evidence,
         ),
@@ -826,11 +1025,18 @@ def test_match_assessment_detail_with_wired_assistant_shows_evidence(
     client = TestClient(create_app(assistant))
     catalog = client.get("/")
     assert 'href="/jobs/86534"' in catalog.text
+    assert "Hard Constraint Evidence" not in catalog.text
+    assert "Preference Evidence" not in catalog.text
 
     response = client.get("/jobs/86534")
     assert response.status_code == 200
     assert "No hard constraint violations" in response.text
     assert "Matches preferred domain" in response.text
+    assert "Hard Constraints file" in response.text
+    assert "Hong Kong only" in response.text
+    assert "Preferences file" in response.text
+    assert "Prefer fintech" in response.text
+    assert "Candidate Snapshot" in response.text
     assert "Build reliable systems in Python." in response.text
     assert "Platform engineer at Example" in response.text
     assert 'action="/jobs/86534/prepare"' in response.text

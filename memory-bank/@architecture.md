@@ -1,6 +1,6 @@
 # Architecture — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014; LLM runtime: ADR-0015. This file describes the **current running code**.
+Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014; LLM runtime: ADR-0015; HC/Preference Evidence: ADR-0016. This file describes the **current running code**.
 
 ## Runtime shape
 
@@ -63,7 +63,9 @@ CREATE TABLE IF NOT EXISTS match_assessments (
     preference TEXT,
     preference_reason TEXT NOT NULL,
     relevance TEXT NOT NULL,
-    evidence_json TEXT NOT NULL
+    evidence_json TEXT NOT NULL,
+    hard_constraint_evidence_json TEXT NOT NULL DEFAULT '[]',
+    preference_evidence_json TEXT NOT NULL DEFAULT '[]'
 );
 ```
 
@@ -71,6 +73,7 @@ CREATE TABLE IF NOT EXISTS match_assessments (
 `list_fingerprint` supports incremental Crawl skip when list row facts are unchanged.
 `detail_json` stores structured detail fields (including Evidence-rich text) from the detail page.
 `preference` is Strong/Mixed/Weak, or SQL NULL for unknown Preference.
+`evidence_json` is Relevance Evidence; `hard_constraint_evidence_json` / `preference_evidence_json` are Hard Constraint Evidence / Preference Evidence (ADR-0016). Pre-upgrade rows migrate to empty HC/Preference lists until a natural rejudge.
 `candidate_fingerprints` detects Master CV / HC / Preferences content or path-clear changes (ADR-0014).
 `match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending) and all Preparation Packets are marked Stale; Crawl new/detail-changed postings clear that posting’s assessment only (packets are not Staled by Crawl). Re-judge is opportunistic: Assessment Summary `GET /` uses `load_assessment_summary_catalog`; Crawl / file-change paths may call `rejudge_pending_assessments`.
 
@@ -106,10 +109,10 @@ tests/                      # Behavior through Assistant (+ UI→Assistant)
 ## Candidate / Crawl / Assessment / Prepare UI
 
 - `/` — Assessment Summary list via `Assistant.load_assessment_summary_catalog` (default Open + Upcoming/Unknown; Closed/Passed toggles; links to Match Assessment detail; Prepare / Re-Prepare; Delete; packet presence/Stale; one refresh + at most five Pending rejudge attempts per load with early-stop on LLM Unavailable; progress banner for `processed_this_load` / `pending_remaining`; short non-secret LLM Unavailable reason when judge/tailor cannot run)
-- `/jobs/{id}` — Match Assessment detail (HC + reason, Preference + reason, Relevance, Relevance Evidence; Prepare / Delete; Pending / LLM Unavailable clear; no accordion / Override)
+- `/jobs/{id}` — Match Assessment detail (HC + reason + Hard Constraint Evidence, Preference + reason + Preference Evidence, Relevance + Relevance Evidence; signal-specific counterpart labels; Prepare / Delete; Pending / LLM Unavailable clear; no accordion / Override)
 - `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
 - `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)
-- `/jobs/{id}/packet` — Gap Report → Edit Summary → Tailored downloads + current Match Assessment
+- `/jobs/{id}/packet` — Gap Report → Edit Summary → Tailored downloads + compact current Match Assessment (bands + short reasons) with link to detail for full Evidence lists
 - `/jobs/{id}/packet/yaml` / `/jobs/{id}/packet/pdf` — downloads
 - `/candidate` — set Master CV / Hard Constraints / Preferences paths; inspect Candidate Snapshot; path/read errors
 - `/crawl` — User-Attended Login, Crawl Filters, Incremental Crawl / Full Refresh
@@ -130,4 +133,4 @@ Live Crawls intentionally wait randomly between Job Board list pages and detail 
 ## Notes
 
 - Production PDF uses `RenderCvPdfRenderer` (RenderCV CLI); local shell falls back to missing-PDF signal when the CLI is unavailable. Tests use `FakePdfRenderer`.
-- Accordion / richer Match Assessment navigation chrome remains out of v1; HC/Preference show short reasons only (no separate stored Evidence lists).
+- Accordion / richer Match Assessment navigation chrome remains out of v1; Hard Constraint / Preference Evidence lists are stored and shown on Match Assessment detail (ADR-0016), not on Assessment Summary or duplicated into the packet path.

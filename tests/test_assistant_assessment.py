@@ -1,5 +1,6 @@
 """Assistant seam: three-signal assessment, freeform HC/Preferences, freshness."""
 
+import sqlite3
 from pathlib import Path
 
 from job_finding_assistant.assistant import Assistant
@@ -337,6 +338,144 @@ def test_non_empty_constraint_files_invoke_llm_with_input_isolation(
     assert "candidate_snapshot" not in judge.preference_calls[0]
     assert len(judge.relevance_calls) == 1
     assert judge.relevance_calls[0]["candidate_snapshot"] is not None
+
+
+def test_rejudge_persists_hard_constraint_and_preference_evidence(
+    tmp_path: Path,
+) -> None:
+    hc_path = tmp_path / "hard.txt"
+    hc_path.write_text("Must be Hong Kong based\n", encoding="utf-8")
+    prefs_path = tmp_path / "prefs.txt"
+    prefs_path.write_text("Prefer fintech\n", encoding="utf-8")
+    hc_evidence = [
+        EvidencePair(
+            job_excerpt="Work Location: Singapore",
+            candidate_excerpt="Must be Hong Kong based",
+            role="violates Hard Constraint",
+        )
+    ]
+    preference_evidence = [
+        EvidencePair(
+            job_excerpt="Fintech platform team",
+            candidate_excerpt="Prefer fintech",
+            role="supports Preference",
+        )
+    ]
+    relevance_evidence = [
+        EvidencePair(
+            job_excerpt="Build reliable systems in Python.",
+            candidate_excerpt="Platform engineer at Example",
+            role="supports Relevance",
+        )
+    ]
+    constraints = FakeConstraintFilesStore()
+    judge = FakeLlmJudge(
+        hard_constraint_outcome="fail",
+        hard_constraint_reason="Location outside Hong Kong",
+        hard_constraint_evidence=hc_evidence,
+        preference="Strong",
+        preference_reason="Matches preferred domain",
+        preference_evidence=preference_evidence,
+        relevance="Strong",
+        evidence=relevance_evidence,
+    )
+    assistant, _ = _crawl_with_master_cv(
+        tmp_path, llm_judge=judge, constraint_files=constraints
+    )
+    assistant.set_hard_constraints_path(str(hc_path))
+    assistant.set_preferences_path(str(prefs_path))
+    assistant.run_crawl()
+    assistant.rejudge_pending_assessments()
+
+    detail = assistant.get_match_assessment("86534")
+    assert detail is not None
+    assert detail.hard_constraint_evidence == hc_evidence
+    assert detail.preference_evidence == preference_evidence
+    assert detail.evidence == relevance_evidence
+
+
+def test_rejudge_keeps_empty_constraint_evidence_when_files_empty(
+    tmp_path: Path,
+) -> None:
+    judge = FakeLlmJudge(
+        hard_constraint_outcome="fail",
+        hard_constraint_evidence=[
+            EvidencePair(
+                job_excerpt="should not persist",
+                candidate_excerpt="padding",
+                role="invented",
+            )
+        ],
+        preference_evidence=[
+            EvidencePair(
+                job_excerpt="should not persist",
+                candidate_excerpt="padding",
+                role="invented",
+            )
+        ],
+        relevance="Strong",
+    )
+    assistant, _ = _crawl_with_master_cv(tmp_path, llm_judge=judge)
+    assistant.run_crawl()
+    assistant.rejudge_pending_assessments()
+
+    detail = assistant.get_match_assessment("86534")
+    assert detail is not None
+    assert detail.hard_constraint_outcome == "unknown"
+    assert detail.preference is None
+    assert detail.hard_constraint_evidence == []
+    assert detail.preference_evidence == []
+    assert detail.evidence
+
+
+def test_pre_upgrade_complete_assessment_loads_empty_constraint_evidence(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "catalog.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE match_assessments (
+                job_posting_id TEXT PRIMARY KEY,
+                hard_constraint_outcome TEXT NOT NULL,
+                hard_constraint_reason TEXT NOT NULL,
+                preference TEXT,
+                preference_reason TEXT NOT NULL,
+                relevance TEXT NOT NULL,
+                evidence_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO match_assessments (
+                job_posting_id,
+                hard_constraint_outcome,
+                hard_constraint_reason,
+                preference,
+                preference_reason,
+                relevance,
+                evidence_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "86534",
+                "pass",
+                "No hard constraint violations",
+                "Mixed",
+                "Partial preference fit",
+                "Strong",
+                '[{"job_excerpt":"Python","candidate_excerpt":"Platform engineer","role":"supports Relevance"}]',
+            ),
+        )
+
+    store = CatalogStore(db_path)
+    loaded = store.get_match_assessment("86534")
+    assert loaded is not None
+    assert loaded.hard_constraint_evidence == []
+    assert loaded.preference_evidence == []
+    assert loaded.evidence[0].job_excerpt == "Python"
 
 
 def test_prepare_available_when_hard_constraint_fails(tmp_path: Path) -> None:

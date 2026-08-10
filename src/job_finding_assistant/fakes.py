@@ -198,8 +198,10 @@ class FakeLlmJudge:
         available: bool = True,
         hard_constraint_outcome: ConstraintOutcome = "pass",
         hard_constraint_reason: str = "No hard constraint violations",
+        hard_constraint_evidence: list[EvidencePair] | None = None,
         preference: PreferenceBand = "Mixed",
         preference_reason: str = "Partial preference fit",
+        preference_evidence: list[EvidencePair] | None = None,
         preferences: list[PreferenceBand] | None = None,
         relevance: RelevanceBand = "Mixed",
         relevances: list[RelevanceBand] | None = None,
@@ -211,8 +213,10 @@ class FakeLlmJudge:
         self._available = available
         self._hard_constraint_outcome = hard_constraint_outcome
         self._hard_constraint_reason = hard_constraint_reason
+        self._hard_constraint_evidence = list(hard_constraint_evidence or [])
         self._preference = preference
         self._preference_reason = preference_reason
+        self._preference_evidence = list(preference_evidence or [])
         self._preferences = list(preferences) if preferences is not None else None
         self._preference_index = 0
         self._relevance = relevance
@@ -273,7 +277,7 @@ class FakeLlmJudge:
         return HardConstraintJudgment(
             outcome=self._hard_constraint_outcome,
             reason=self._hard_constraint_reason,
-            evidence=[],
+            evidence=list(self._hard_constraint_evidence),
         )
 
     def judge_preference(
@@ -300,7 +304,7 @@ class FakeLlmJudge:
         return PreferenceJudgment(
             preference=preference,
             reason=self._preference_reason,
-            evidence=[],
+            evidence=list(self._preference_evidence),
         )
 
     def judge_relevance(

@@ -137,8 +137,13 @@
       <p class="meta">
         Hard Constraint: {{ match_assessment.hard_constraint_outcome }}
         ({{ match_assessment.hard_constraint_reason }}) ·
-        Preference: {{ match_assessment.preference or "unknown" }} ·
+        Preference: {{ match_assessment.preference or "unknown" }}
+        ({{ match_assessment.preference_reason }}) ·
         Relevance: {{ match_assessment.relevance }}
+      </p>
+      <p class="meta">
+        <a href="/jobs/{{ job_posting_id }}">View Match Assessment</a>
+        for full Evidence lists.
       </p>
       {% else %}
       <p class="meta">Pending — assessments refresh after candidate-file or Crawl changes.</p>
