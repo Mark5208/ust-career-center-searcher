@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from job_finding_assistant.assistant import (
     AssessmentSummary,
+    AssessmentSummaryCatalog,
     Assistant,
     CrawlFilters,
     CrawlOutcome,
@@ -26,21 +27,29 @@ from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.llm_runtime import build_llm_ports, load_llm_runtime_config
-from job_finding_assistant.match_assessment import MatchAssessment
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
+from job_finding_assistant.match_assessment import MatchAssessment
 from job_finding_assistant.preparation_packet import PreparationPacket
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
 class SupportsAssistantUi(Protocol):
+    def load_assessment_summary_catalog(
+        self,
+        *,
+        include_closed: bool = False,
+        include_passed_deadlines: bool = False,
+    ) -> AssessmentSummaryCatalog:
+        """Load Assessment Summary catalog (rejudge + rows + progress) for GET /."""
+
     def list_assessment_summaries(
         self,
         *,
         include_closed: bool = False,
         include_passed_deadlines: bool = False,
     ) -> list[AssessmentSummary]:
-        """Return Assessment Summaries for the catalog page."""
+        """Return Assessment Summaries (detail/packet helpers; no rejudge)."""
 
     def can_prepare(self, job_posting_id: str) -> bool:
         """Return whether Prepare is available for the Job Posting."""
@@ -68,9 +77,6 @@ class SupportsAssistantUi(Protocol):
 
     def delete(self, job_posting_id: str, *, confirm: bool = False) -> None:
         """Hard-remove Job Posting, Match Assessment, and Preparation Packet."""
-
-    def rejudge_pending_assessments(self) -> None:
-        """Opportunistically judge Pending Match Assessments."""
 
     def get_master_cv_path(self) -> str | None:
         """Return the configured Master CV path."""
@@ -148,27 +154,21 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
         show_closed = include_closed == "1"
         show_passed = include_passed_deadlines == "1"
         current = request.app.state.assistant
-        current.rejudge_pending_assessments()
-        summaries = current.list_assessment_summaries(
+        catalog = current.load_assessment_summary_catalog(
             include_closed=show_closed,
             include_passed_deadlines=show_passed,
         )
-        rows = [
-            {
-                "summary": summary,
-                "can_prepare": current.can_prepare(summary.job_posting_id),
-            }
-            for summary in summaries
-        ]
         return _TEMPLATES.TemplateResponse(
             request,
             "assessment_summaries.html",
             {
-                "rows": rows,
+                "rows": catalog.rows,
                 "include_closed": show_closed,
                 "include_passed_deadlines": show_passed,
                 "prepare_error": request.app.state.prepare_error,
-                "llm_unavailable_reason": current.get_llm_unavailable_reason(),
+                "llm_unavailable_reason": catalog.llm_unavailable_reason,
+                "processed_this_load": catalog.processed_this_load,
+                "pending_remaining": catalog.pending_remaining,
             },
         )
 

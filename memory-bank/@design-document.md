@@ -24,10 +24,10 @@ Structured languages / locations / Gap Tolerance Preferences form is superseded 
 
 ### Assessment freshness (ADR-0014)
 
-Implemented through `Assistant.refresh_candidate_file_state` + `rejudge_pending_assessments`:
+Implemented through `Assistant.refresh_candidate_file_state` plus opportunistic rejudge (`load_assessment_summary_catalog` on Assessment Summary load; `rejudge_pending_assessments` after Crawl / file change):
 
 - Candidate-file “change” = content or path clear (fingerprint on next check); not path-only; no always-on watcher.
-- On change: Snapshot now; **all** assessments Pending (Open and Closed); re-judge opportunistic (catalog UI on load).
+- On change: Snapshot now; **all** assessments Pending (Open and Closed); re-judge opportunistic (catalog UI via `load_assessment_summary_catalog` on load).
 - Crawl: catalog sync independent of assessment; new/detail-changed → Pending then opportunistic re-judge; Crawl does not Stale packets (ADR-0013; packets still absent).
 - Unreadable Master CV → no Snapshot, Pending + error; unreadable HC/Prefs path → unknown + path error (not Pending).
 - Judge failure → leave Pending (never half-assessed final row).
@@ -46,7 +46,7 @@ Preference and Relevance call sites enforce input isolation (`judge_preference` 
 
 ### LLM runtime (ADR-0015)
 
-`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse/timeout failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). Opportunistic rejudge assesses at most one Pending posting per catalog load and defers a failed/skipped head so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
+`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse/timeout failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). Assessment Summary `GET /` uses `load_assessment_summary_catalog` (one refresh + at most one Pending rejudge + progress banner); failed/skipped heads are deferred so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 
@@ -123,6 +123,6 @@ Through `Assistant` and `/` Assessment Summary UI:
 - Assessment Summary shows title, employer, Listing status, Deadline status, Hard Constraint, Preference, Relevance, Preparation Packet presence/Stale (packet absent in this slice).
 - Default filter: Open + Deadline Upcoming/Unknown; Closed and Deadline Passed toggleable; sort Pending last, Hard Constraint fail after pass/unknown, Preference then Relevance, sooner deadline (Deadline Unknown last among ties).
 - Hard Constraint / Preference / Relevance via fakeable `LlmJudge` with input isolation; empty HC/Prefs → unknown without judge; Prepare unavailable only while Pending (HC fail does not block).
-- Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic `rejudge_pending_assessments`.
+- Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic rejudge via `load_assessment_summary_catalog` / `rejudge_pending_assessments`.
 
 Prepare / packets / Delete shipped in #13–#14.

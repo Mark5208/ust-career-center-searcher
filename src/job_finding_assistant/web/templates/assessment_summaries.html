@@ -118,6 +118,14 @@
       {% if llm_unavailable_reason %}
       <p class="empty">{{ llm_unavailable_reason }}</p>
       {% endif %}
+      {% if processed_this_load > 0 and pending_remaining > 0 %}
+      <p class="empty">
+        Processed {{ processed_this_load }} Pending this load;
+        {{ pending_remaining }} still Pending. Refresh to continue.
+      </p>
+      {% elif processed_this_load > 0 and pending_remaining == 0 %}
+      <p class="empty">Processed {{ processed_this_load }} Pending this load; none left.</p>
+      {% endif %}
       {% if prepare_error %}
       <p class="empty">{{ prepare_error }}</p>
       {% endif %}

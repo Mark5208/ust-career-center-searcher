@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from job_finding_assistant.assistant import (
     AssessmentSummary,
+    AssessmentSummaryCatalog,
+    AssessmentSummaryCatalogRow,
     Assistant,
     CrawlFilters,
     CrawlOutcome,
@@ -25,8 +27,8 @@ from job_finding_assistant.fakes import (
     FakeMasterCvStore,
 )
 from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
-from job_finding_assistant.match_assessment import EvidencePair, MatchAssessment
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
+from job_finding_assistant.match_assessment import EvidencePair, MatchAssessment
 from job_finding_assistant.preparation_packet import (
     EditSummary,
     GapReport,
@@ -41,9 +43,13 @@ class _RecordingAssistant:
     def __init__(self) -> None:
         self.list_calls = 0
         self.list_kwargs: dict[str, bool] = {}
+        self.catalog_load_calls = 0
+        self.catalog_load_kwargs: dict[str, bool] = {}
         self.summaries: list[AssessmentSummary] = []
         self.can_prepare_calls: list[str] = []
         self.rejudge_calls = 0
+        self.processed_this_load = 0
+        self.pending_remaining = 0
         self.master_cv_path: str | None = None
         self.snapshot: CandidateSnapshot | None = None
         self.hard_constraints_path: str | None = None
@@ -70,6 +76,34 @@ class _RecordingAssistant:
         )
         self.match_assessments: dict[str, MatchAssessment] = {}
         self.get_match_assessment_calls: list[str] = []
+
+    def load_assessment_summary_catalog(
+        self,
+        *,
+        include_closed: bool = False,
+        include_passed_deadlines: bool = False,
+    ) -> AssessmentSummaryCatalog:
+        self.catalog_load_calls += 1
+        self.catalog_load_kwargs = {
+            "include_closed": include_closed,
+            "include_passed_deadlines": include_passed_deadlines,
+        }
+        rows = [
+            AssessmentSummaryCatalogRow(
+                summary=summary,
+                can_prepare=not summary.pending,
+            )
+            for summary in self.summaries
+        ]
+        pending = sum(1 for summary in self.summaries if summary.pending)
+        return AssessmentSummaryCatalog(
+            rows=rows,
+            processed_this_load=self.processed_this_load,
+            pending_remaining=(
+                self.pending_remaining if self.pending_remaining else pending
+            ),
+            llm_unavailable_reason=self.llm_unavailable_reason,
+        )
 
     def list_assessment_summaries(
         self,
@@ -199,9 +233,10 @@ def test_catalog_page_calls_assistant_and_shows_empty_job_postings_state() -> No
     response = client.get("/")
 
     assert response.status_code == 200
-    assert assistant.list_calls == 1
-    assert assistant.rejudge_calls == 1
-    assert assistant.list_kwargs == {
+    assert assistant.catalog_load_calls == 1
+    assert assistant.list_calls == 0
+    assert assistant.can_prepare_calls == []
+    assert assistant.catalog_load_kwargs == {
         "include_closed": False,
         "include_passed_deadlines": False,
     }
@@ -255,7 +290,32 @@ def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pendi
     assert "Strong" in response.text
     assert "pass" in response.text
     assert "Preference" in response.text
-    assert assistant.can_prepare_calls == ["86534", "86535"]
+    assert assistant.catalog_load_calls == 1
+    assert assistant.can_prepare_calls == []
+
+
+def test_catalog_page_shows_rejudge_progress_banner() -> None:
+    assistant = _RecordingAssistant()
+    assistant.processed_this_load = 1
+    assistant.pending_remaining = 7
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=True,
+        ),
+    ]
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Processed 1 Pending this load" in response.text
+    assert "7 still Pending" in response.text
+    assert "Refresh to continue" in response.text
 
 
 def test_catalog_page_passes_closed_and_passed_toggles_to_assistant() -> None:
@@ -265,7 +325,7 @@ def test_catalog_page_passes_closed_and_passed_toggles_to_assistant() -> None:
     response = client.get("/?include_closed=1&include_passed_deadlines=1")
 
     assert response.status_code == 200
-    assert assistant.list_kwargs == {
+    assert assistant.catalog_load_kwargs == {
         "include_closed": True,
         "include_passed_deadlines": True,
     }
