@@ -11,6 +11,7 @@ from job_finding_assistant.candidate_snapshot import (
 from job_finding_assistant.constraint_files import ConstraintFileRead, read_constraint_file
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
+from job_finding_assistant.llm_runtime import LlmUnavailableError
 from job_finding_assistant.match_assessment import (
     ConstraintOutcome,
     EvidencePair,
@@ -258,6 +259,11 @@ class FakeLlmJudge:
         title = str(job_detail_fields.get("title") or "")
         return title in self._fail_for_titles
 
+    def _raise_unavailable(self) -> None:
+        if not self._available:
+            raise LlmUnavailableError("Fake judge disabled")
+        raise LlmUnavailableError("Fake judge failed")
+
     def judge_hard_constraint(
         self,
         *,
@@ -265,7 +271,7 @@ class FakeLlmJudge:
         job_detail_fields: dict[str, str],
     ) -> HardConstraintJudgment:
         if self._should_fail(job_detail_fields):
-            raise RuntimeError("FakeLlmJudge is not available")
+            self._raise_unavailable()
         self._maybe_delay()
         self.judge_calls += 1
         self.hard_constraint_calls.append(
@@ -287,7 +293,7 @@ class FakeLlmJudge:
         job_detail_fields: dict[str, str],
     ) -> PreferenceJudgment:
         if self._should_fail(job_detail_fields):
-            raise RuntimeError("FakeLlmJudge is not available")
+            self._raise_unavailable()
         self._maybe_delay()
         self.judge_calls += 1
         self.preference_calls.append(
@@ -314,7 +320,7 @@ class FakeLlmJudge:
         candidate_snapshot: CandidateSnapshot,
     ) -> RelevanceJudgment:
         if self._should_fail(job_detail_fields):
-            raise RuntimeError("FakeLlmJudge is not available")
+            self._raise_unavailable()
         self._maybe_delay()
         self.judge_calls += 1
         self.relevance_calls.append(
@@ -370,7 +376,9 @@ class FakeLlmCvTailor:
         hard_constraint_reason: str,
     ) -> TailorResult:
         if not self._available or self._fail_on_call:
-            raise RuntimeError("FakeLlmCvTailor is not available")
+            if not self._available:
+                raise LlmUnavailableError("Fake tailor disabled")
+            raise LlmUnavailableError("Fake tailor failed")
         self.tailor_calls += 1
         self.tailor_inputs.append(
             {

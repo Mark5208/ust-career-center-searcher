@@ -3,6 +3,8 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from job_finding_assistant.assistant import Assistant
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.fakes import (
@@ -520,9 +522,38 @@ def test_judge_failure_leaves_pending_without_half_assessment(tmp_path: Path) ->
     assistant.rejudge_pending_assessments()
 
     assert assistant.list_assessment_summaries()[0].pending is True
-    reason = assistant.get_llm_unavailable_reason()
-    assert reason is not None
-    assert reason.startswith("LLM Unavailable:")
+    assert assistant.get_llm_unavailable_reason() == "LLM Unavailable: Fake judge failed"
+
+
+def test_assistant_does_not_wrap_bare_judge_errors_as_llm_unavailable(
+    tmp_path: Path,
+) -> None:
+    """Adapters own LlmUnavailableError; Assistant only pass-through-caches .reason."""
+
+    class _BareErrorJudge:
+        def available(self) -> bool:
+            return True
+
+        def unavailable_reason(self) -> str | None:
+            return None
+
+        def judge_hard_constraint(self, **kwargs: object) -> object:
+            del kwargs
+            raise RuntimeError("raw adapter bug")
+
+        def judge_preference(self, **kwargs: object) -> object:
+            del kwargs
+            raise RuntimeError("raw adapter bug")
+
+        def judge_relevance(self, **kwargs: object) -> object:
+            del kwargs
+            raise RuntimeError("raw adapter bug")
+
+    assistant, _ = _crawl_with_master_cv(tmp_path, llm_judge=_BareErrorJudge())  # type: ignore[arg-type]
+    assistant.run_crawl()
+    with pytest.raises(RuntimeError, match="raw adapter bug"):
+        assistant.rejudge_pending_assessments()
+    assert assistant.get_llm_unavailable_reason() is None
 
 
 def test_fingerprint_change_marks_all_assessments_pending(tmp_path: Path) -> None:
