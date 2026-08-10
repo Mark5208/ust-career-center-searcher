@@ -6,7 +6,7 @@ How the tool detects Master CV / Hard Constraints / Preferences “change,” wh
 
 ## What counts as a candidate-file change
 
-A change to the Master CV, Hard Constraints file, or Preferences file means **content** change or **path clear/unset**, not merely re-setting the same path. Detect via a file fingerprint on the next rebuild/Stale check (e.g. app use, Crawl complete, Prepare, or explicit refresh). No always-on file watcher in v1.
+A change to the Master CV, Hard Constraints file, or Preferences file means **content** change or **path clear/unset**, not merely re-setting the same path. Detect via a file fingerprint on the next rebuild/Stale check (e.g. app use, Crawl complete, or Prepare). No always-on file watcher in v1.
 
 **Rejected:** Path-only change detection (edits in another editor would never refresh Snapshot, assessments, or Stale).
 

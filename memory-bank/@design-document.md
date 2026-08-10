@@ -24,7 +24,7 @@ Structured languages / locations / Gap Tolerance Preferences form is superseded 
 
 ### Assessment freshness (ADR-0014)
 
-Implemented through `Assistant.refresh_candidate_file_state` plus opportunistic rejudge (`load_assessment_summary_catalog` on Assessment Summary load; `rejudge_pending_assessments` after Crawl / file change):
+Implemented through an internal `Assistant` candidate-file freshness gate (fingerprint Pending/Stale side effects) plus opportunistic rejudge (`load_assessment_summary_catalog` on Assessment Summary load; `rejudge_pending_assessments` after Crawl / file change). Out-of-band disk edits are observed on the next public Assistant use — there is no public refresh method:
 
 - Candidate-file “change” = content or path clear (fingerprint on next check); not path-only; no always-on watcher.
 - On change: Snapshot now; **all** assessments Pending (Open and Closed); re-judge opportunistic (catalog UI via `load_assessment_summary_catalog` on load).
