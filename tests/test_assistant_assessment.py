@@ -556,6 +556,11 @@ def test_assistant_does_not_wrap_bare_judge_errors_as_llm_unavailable(
     assert assistant.get_llm_unavailable_reason() is None
 
 
+def test_assistant_does_not_expose_public_refresh_candidate_file_state() -> None:
+    """Freshness is an internal Assistant gate (ADR-0014); callers use public reads."""
+    assert not hasattr(Assistant, "refresh_candidate_file_state")
+
+
 def test_fingerprint_change_marks_all_assessments_pending(tmp_path: Path) -> None:
     prefs_path = tmp_path / "prefs.txt"
     prefs_path.write_text("Prefer remote\n", encoding="utf-8")
@@ -570,7 +575,6 @@ def test_fingerprint_change_marks_all_assessments_pending(tmp_path: Path) -> Non
     assert assistant.list_assessment_summaries()[0].pending is False
 
     prefs_path.write_text("Prefer on-site Hong Kong\n", encoding="utf-8")
-    assistant.refresh_candidate_file_state()
 
     assert assistant.list_assessment_summaries()[0].pending is True
     assistant.rejudge_pending_assessments()
@@ -591,7 +595,6 @@ def test_master_cv_yaml_content_change_marks_all_assessments_pending(
         _SAMPLE_CV.replace("Platform engineer", "Staff platform engineer"),
         encoding="utf-8",
     )
-    assistant.refresh_candidate_file_state()
 
     assert assistant.list_assessment_summaries()[0].pending is True
     assert "Staff platform engineer" in (

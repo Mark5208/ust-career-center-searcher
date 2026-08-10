@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS match_assessments (
 `preference` is Strong/Mixed/Weak, or SQL NULL for unknown Preference.
 `evidence_json` is Relevance Evidence; `hard_constraint_evidence_json` / `preference_evidence_json` are Hard Constraint Evidence / Preference Evidence (ADR-0016). Pre-upgrade rows migrate to empty HC/Preference lists until a natural rejudge.
 `candidate_fingerprints` detects Master CV / HC / Preferences content or path-clear changes (ADR-0014).
-`match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending) and all Preparation Packets are marked Stale; Crawl new/detail-changed postings clear that posting’s assessment only (packets are not Staled by Crawl). Re-judge is opportunistic: Assessment Summary `GET /` uses `load_assessment_summary_catalog`; Crawl / file-change paths may call `rejudge_pending_assessments`.
+`match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending) and all Preparation Packets are marked Stale; Crawl new/detail-changed postings clear that posting’s assessment only (packets are not Staled by Crawl). Candidate-file freshness is an internal `Assistant` gate (same call sites as before; not a public method); out-of-band disk edits are observed on the next public use. Re-judge is opportunistic: Assessment Summary `GET /` uses `load_assessment_summary_catalog`; Crawl / file-change paths may call `rejudge_pending_assessments`.
 
 Preparation Packet artifacts live under the tool-managed `PacketStore` directory (not SQLite): per Job Posting `gap_report.json`, `edit_summary.json`, `tailored.yaml`, optional `tailored.pdf`, and `meta.json` (`stale`).
 

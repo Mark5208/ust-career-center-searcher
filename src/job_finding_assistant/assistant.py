@@ -159,7 +159,7 @@ class Assistant:
         include_passed_deadlines: bool = False,
     ) -> list[AssessmentSummary]:
         """Return Assessment Summaries with default filter/sort (glossary)."""
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         return self._list_assessment_summaries_after_refresh(
             include_closed=include_closed,
             include_passed_deadlines=include_passed_deadlines,
@@ -176,7 +176,7 @@ class Assistant:
         Intended for GET / only. Match Assessment detail must not call this (no queue advance).
         On LLM Unavailable for an attempt, stop further attempts for this load (early-stop).
         """
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         processed = self._rejudge_pending_after_refresh(budget=_CATALOG_REJUDGE_BUDGET)
         summaries = self._list_assessment_summaries_after_refresh(
             include_closed=include_closed,
@@ -203,7 +203,7 @@ class Assistant:
 
     def get_match_assessment(self, job_posting_id: str) -> MatchAssessment | None:
         """Return the Match Assessment detail, or None when Pending."""
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         return self._catalog_store.get_match_assessment(job_posting_id)
 
     def prepare(
@@ -219,7 +219,7 @@ class Assistant:
         re-Prepare overwrite, and PrepareFailedError when the tailor fails mid-run
         (prior packet left untouched). PDF-only failure still persists the packet.
         """
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         assessment = self._catalog_store.get_match_assessment(job_posting_id)
         if assessment is None:
             raise PrepareBlockedError(
@@ -301,7 +301,7 @@ class Assistant:
 
     def get_preparation_packet(self, job_posting_id: str) -> PreparationPacketView | None:
         """Return the Preparation Packet with the current Match Assessment, if any."""
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         packet = self._packet_store.get(job_posting_id)
         if packet is None:
             return None
@@ -348,7 +348,7 @@ class Assistant:
     def set_master_cv_path(self, path: str) -> None:
         """Point at a Master CV RenderCV YAML file; never overwrites that file."""
         self._master_cv.set_master_cv_path(path)
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
 
     def get_master_cv_path(self) -> str | None:
         """Return the configured Master CV path, if any."""
@@ -365,12 +365,12 @@ class Assistant:
     def set_hard_constraints_path(self, path: str) -> None:
         """Point at a Hard Constraints plain-text file; never overwrites that file."""
         self._constraint_files.set_hard_constraints_path(path)
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
 
     def clear_hard_constraints_path(self) -> None:
         """Clear the Hard Constraints path (counts as a candidate-file change)."""
         self._constraint_files.clear_hard_constraints_path()
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
 
     def get_preferences_path(self) -> str | None:
         """Return the configured Preferences file path, if any."""
@@ -379,16 +379,16 @@ class Assistant:
     def set_preferences_path(self, path: str) -> None:
         """Point at a Preferences plain-text file; never overwrites that file."""
         self._constraint_files.set_preferences_path(path)
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
 
     def clear_preferences_path(self) -> None:
         """Clear the Preferences path (counts as a candidate-file change)."""
         self._constraint_files.clear_preferences_path()
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
 
     def get_candidate_file_errors(self) -> list[str]:
         """Return path/read errors for Master CV / Hard Constraints / Preferences."""
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         return list(self._candidate_file_errors)
 
     def get_llm_unavailable_reason(self) -> str | None:
@@ -422,7 +422,7 @@ class Assistant:
         succeeded, not that Match Assessments finished — call
         ``rejudge_pending_assessments`` afterward (opportunistic).
         """
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         if not self._job_board.is_authenticated():
             return CrawlOutcome(status="not_authenticated", stored_count=0)
 
@@ -484,7 +484,7 @@ class Assistant:
         Returns 1 if a Pending posting was processed (budget used), else 0.
         Prefer ``load_assessment_summary_catalog`` for the Assessment Summary page.
         """
-        self.refresh_candidate_file_state()
+        self._refresh_candidate_file_state()
         return self._rejudge_pending_after_refresh(budget=1)
 
     def _rejudge_pending_after_refresh(self, *, budget: int) -> int:
@@ -562,12 +562,13 @@ class Assistant:
         ]
         return sorted(filtered, key=_summary_sort_key)
 
-    def refresh_candidate_file_state(self) -> None:
-        """Detect Master CV / HC / Preferences content or path-clear changes.
+    def _refresh_candidate_file_state(self) -> None:
+        """Internal freshness gate: Master CV / HC / Preferences content or path-clear.
 
         On change: rebuild Snapshot (via Master CV store), mark **all** assessments
         Pending, mark Preparation Packets Stale, and record path/read errors.
-        Does not auto-rejudge or auto-regenerate packets.
+        Does not auto-rejudge or auto-regenerate packets. Callers use public
+        Assistant methods; out-of-band disk edits are observed on the next use.
         """
         errors: list[str] = []
         master_path = self._master_cv.master_cv_path()
