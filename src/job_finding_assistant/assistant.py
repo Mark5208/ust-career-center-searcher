@@ -101,6 +101,24 @@ class AssessmentSummary:
     application_deadline: str | None = None
 
 
+@dataclass(frozen=True)
+class AssessmentSummaryCatalogRow:
+    """One Assessment Summary row for the catalog, with Prepare availability."""
+
+    summary: AssessmentSummary
+    can_prepare: bool
+
+
+@dataclass(frozen=True)
+class AssessmentSummaryCatalog:
+    """Catalog page payload: rows, one-Pending rejudge progress, LLM Unavailable."""
+
+    rows: list[AssessmentSummaryCatalogRow]
+    processed_this_load: int
+    pending_remaining: int
+    llm_unavailable_reason: str | None
+
+
 class Assistant:
     """Application API for the Job Finding Assistant.
 
@@ -145,36 +163,41 @@ class Assistant:
     ) -> list[AssessmentSummary]:
         """Return Assessment Summaries with default filter/sort (glossary)."""
         self.refresh_candidate_file_state()
-        summaries: list[AssessmentSummary] = []
-        for row in self._catalog_store.list_assessment_summary_rows():
-            job_id = row["id"] or ""
-            packet = self._packet_store.get(job_id)
-            summaries.append(
-                AssessmentSummary(
-                    job_posting_id=job_id,
-                    title=row["title"] or "",
-                    employer=row["employer"] or "",
-                    listing_status=row["listing_status"] or "Open",
-                    deadline_status=row["deadline_status"] or "Unknown",
-                    pending=row.get("relevance") is None,
-                    hard_constraint_outcome=row.get("hard_constraint_outcome"),
-                    preference=row.get("preference"),
-                    relevance=row.get("relevance"),
-                    has_preparation_packet=packet is not None,
-                    preparation_packet_stale=bool(packet and packet.stale),
-                    application_deadline=row.get("application_deadline"),
-                )
+        return self._list_assessment_summaries_after_refresh(
+            include_closed=include_closed,
+            include_passed_deadlines=include_passed_deadlines,
+        )
+
+    def load_assessment_summary_catalog(
+        self,
+        *,
+        include_closed: bool = False,
+        include_passed_deadlines: bool = False,
+    ) -> AssessmentSummaryCatalog:
+        """Load Assessment Summary catalog: one refresh, one Pending rejudge, rows + progress.
+
+        Intended for GET / only. Match Assessment detail must not call this (no queue advance).
+        """
+        self.refresh_candidate_file_state()
+        processed = self._rejudge_one_pending_after_refresh()
+        summaries = self._list_assessment_summaries_after_refresh(
+            include_closed=include_closed,
+            include_passed_deadlines=include_passed_deadlines,
+        )
+        pending_remaining = len(self._catalog_store.list_pending_job_posting_ids())
+        rows = [
+            AssessmentSummaryCatalogRow(
+                summary=summary,
+                can_prepare=self.can_prepare(summary.job_posting_id),
             )
-        filtered = [
-            summary
             for summary in summaries
-            if _passes_default_filter(
-                summary,
-                include_closed=include_closed,
-                include_passed_deadlines=include_passed_deadlines,
-            )
         ]
-        return sorted(filtered, key=_summary_sort_key)
+        return AssessmentSummaryCatalog(
+            rows=rows,
+            processed_this_load=processed,
+            pending_remaining=pending_remaining,
+            llm_unavailable_reason=self.get_llm_unavailable_reason(),
+        )
 
     def can_prepare(self, job_posting_id: str) -> bool:
         """Prepare is unavailable only while Pending (Hard Constraint fail does not block)."""
@@ -452,7 +475,7 @@ class Assistant:
             self._catalog_store.mark_missing_open_postings_closed(seen_ids)
         return CrawlOutcome(status="completed", stored_count=stored_count)
 
-    def rejudge_pending_assessments(self) -> None:
+    def rejudge_pending_assessments(self) -> int:
         """Opportunistically judge Pending Match Assessments (after Crawl / file change).
 
         Budgets at most one Pending Job Posting per call so catalog GET / cannot block
@@ -460,12 +483,18 @@ class Assistant:
 
         When a posting fails or is skipped, it is deferred for this process so later
         Pending ids can still advance; after a full pass the deferred heads are retried.
+
+        Returns 1 if a Pending posting was processed (budget used), else 0.
+        Prefer ``load_assessment_summary_catalog`` for the Assessment Summary page.
         """
         self.refresh_candidate_file_state()
+        return self._rejudge_one_pending_after_refresh()
+
+    def _rejudge_one_pending_after_refresh(self) -> int:
         pending = self._catalog_store.list_pending_job_posting_ids()
         if not pending:
             self._rejudge_skip_ids.clear()
-            return
+            return 0
         candidates = [job_id for job_id in pending if job_id not in self._rejudge_skip_ids]
         if not candidates:
             # Full pass completed with failures still Pending — retry from the head.
@@ -479,6 +508,44 @@ class Assistant:
         else:
             # llm_failed / skipped: leave Pending, advance past this id next call.
             self._rejudge_skip_ids.add(job_id)
+        return 1
+
+    def _list_assessment_summaries_after_refresh(
+        self,
+        *,
+        include_closed: bool = False,
+        include_passed_deadlines: bool = False,
+    ) -> list[AssessmentSummary]:
+        summaries: list[AssessmentSummary] = []
+        for row in self._catalog_store.list_assessment_summary_rows():
+            job_id = row["id"] or ""
+            packet = self._packet_store.get(job_id)
+            summaries.append(
+                AssessmentSummary(
+                    job_posting_id=job_id,
+                    title=row["title"] or "",
+                    employer=row["employer"] or "",
+                    listing_status=row["listing_status"] or "Open",
+                    deadline_status=row["deadline_status"] or "Unknown",
+                    pending=row.get("relevance") is None,
+                    hard_constraint_outcome=row.get("hard_constraint_outcome"),
+                    preference=row.get("preference"),
+                    relevance=row.get("relevance"),
+                    has_preparation_packet=packet is not None,
+                    preparation_packet_stale=bool(packet and packet.stale),
+                    application_deadline=row.get("application_deadline"),
+                )
+            )
+        filtered = [
+            summary
+            for summary in summaries
+            if _passes_default_filter(
+                summary,
+                include_closed=include_closed,
+                include_passed_deadlines=include_passed_deadlines,
+            )
+        ]
+        return sorted(filtered, key=_summary_sort_key)
 
     def refresh_candidate_file_state(self) -> None:
         """Detect Master CV / HC / Preferences content or path-clear changes.

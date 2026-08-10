@@ -183,6 +183,43 @@ def test_rejudge_pending_assessments_budgets_one_posting_per_call(tmp_path: Path
     assert judge.judge_calls == 2
 
 
+def test_load_assessment_summary_catalog_processes_one_and_reports_progress(
+    tmp_path: Path,
+) -> None:
+    entry_a, detail_a = _open_posting(job_id="86534", title="Engineer A")
+    entry_b, detail_b = _open_posting(job_id="86535", title="Engineer B", employer="Other")
+    job_board = FakeJobBoardSession(
+        authenticated=True,
+        list_entries=[entry_a, entry_b],
+        details={detail_a.id: detail_a, detail_b.id: detail_b},
+    )
+    judge = FakeLlmJudge(relevance="Strong")
+    cv_path = _write_cv(tmp_path)
+    assistant = _assistant(
+        tmp_path,
+        job_board=job_board,
+        master_cv=FakeMasterCvStore(),
+        llm_judge=judge,
+    )
+    assistant.set_master_cv_path(str(cv_path))
+    assistant.run_crawl()
+
+    catalog = assistant.load_assessment_summary_catalog()
+
+    assert catalog.processed_this_load == 1
+    assert catalog.pending_remaining == 1
+    assert len(catalog.rows) == 2
+    assert sum(1 for row in catalog.rows if row.summary.pending) == 1
+    assert sum(1 for row in catalog.rows if row.can_prepare) == 1
+    assert judge.judge_calls == 1
+
+    caught_up = assistant.load_assessment_summary_catalog()
+    assert caught_up.processed_this_load == 1
+    assert caught_up.pending_remaining == 0
+    assert all(not row.summary.pending for row in caught_up.rows)
+    assert all(row.can_prepare for row in caught_up.rows)
+
+
 def test_rejudge_does_not_starve_later_pending_when_head_fails(tmp_path: Path) -> None:
     """One failing Pending head must not block later jobs forever (HOL)."""
     entry_a, detail_a = _open_posting(job_id="85904", title="Engineer A")

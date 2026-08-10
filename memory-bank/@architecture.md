@@ -12,7 +12,7 @@ Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 
 - **Hard Constraints / Preferences:** plain-text file paths via `DiskConstraintFilesStore` (tool reads only; empty/missing → unknown without judge).
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests. Live adapter marshals all sync Playwright calls onto one dedicated worker thread (FastAPI’s sync threadpool would otherwise raise `greenlet.error` on later `/crawl` loads).
 - **Crawl pacing:** `CrawlPacer` inserts random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests.
-- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary). Normal app path: OpenAI-compatible live client from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / model; ADR-0015). Missing key → unavailable adapters (not Fake). Fake stays for tests only. Catalog `rejudge_pending_assessments` budgets one Pending posting per call (refresh continues); on `llm_failed`/`skipped`, that id is deferred for the process so later Pending jobs still advance (retry deferred heads after a full pass); live HTTP timeout 30s → LLM Unavailable. Compatible hosts (e.g. DeepSeek) need matching `JOB_FINDING_ASSISTANT_LLM_MODEL`, not the OpenAI default.
+- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary). Normal app path: OpenAI-compatible live client from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / model; ADR-0015). Missing key → unavailable adapters (not Fake). Fake stays for tests only. Catalog load via `load_assessment_summary_catalog` budgets one Pending posting per call (refresh continues); on `llm_failed`/`skipped`, that id is deferred for the process so later Pending jobs still advance (retry deferred heads after a full pass); live HTTP timeout 30s → LLM Unavailable. Compatible hosts (e.g. DeepSeek) need matching `JOB_FINDING_ASSISTANT_LLM_MODEL`, not the OpenAI default.
 - **PDF:** `PdfRenderer` (`RenderCvPdfRenderer` via RenderCV CLI; `FakePdfRenderer` in tests). PDF-only failure leaves packet without PDF.
 
 ```
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS match_assessments (
 `detail_json` stores structured detail fields (including Evidence-rich text) from the detail page.
 `preference` is Strong/Mixed/Weak, or SQL NULL for unknown Preference.
 `candidate_fingerprints` detects Master CV / HC / Preferences content or path-clear changes (ADR-0014).
-`match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending) and all Preparation Packets are marked Stale; Crawl new/detail-changed postings clear that posting’s assessment only (packets are not Staled by Crawl). Re-judge is opportunistic via `rejudge_pending_assessments()` (catalog UI calls it on load).
+`match_assessments` absence means Pending. On candidate-file fingerprint change, all assessment rows are cleared (Pending) and all Preparation Packets are marked Stale; Crawl new/detail-changed postings clear that posting’s assessment only (packets are not Staled by Crawl). Re-judge is opportunistic: Assessment Summary `GET /` uses `load_assessment_summary_catalog`; Crawl / file-change paths may call `rejudge_pending_assessments`.
 
 Preparation Packet artifacts live under the tool-managed `PacketStore` directory (not SQLite): per Job Posting `gap_report.json`, `edit_summary.json`, `tailored.yaml`, optional `tailored.pdf`, and `meta.json` (`stale`).
 
@@ -105,7 +105,7 @@ tests/                      # Behavior through Assistant (+ UI→Assistant)
 
 ## Candidate / Crawl / Assessment / Prepare UI
 
-- `/` — Assessment Summary list (default Open + Upcoming/Unknown; Closed/Passed toggles; links to Match Assessment detail; Prepare / Re-Prepare; Delete; packet presence/Stale; opportunistic rejudge of at most one Pending posting on load; short non-secret LLM Unavailable reason when judge/tailor cannot run)
+- `/` — Assessment Summary list via `Assistant.load_assessment_summary_catalog` (default Open + Upcoming/Unknown; Closed/Passed toggles; links to Match Assessment detail; Prepare / Re-Prepare; Delete; packet presence/Stale; one refresh + at most one Pending rejudge per load; progress banner for `processed_this_load` / `pending_remaining`; short non-secret LLM Unavailable reason when judge/tailor cannot run)
 - `/jobs/{id}` — Match Assessment detail (HC + reason, Preference + reason, Relevance, Relevance Evidence; Prepare / Delete; Pending / LLM Unavailable clear; no accordion / Override)
 - `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
 - `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)
