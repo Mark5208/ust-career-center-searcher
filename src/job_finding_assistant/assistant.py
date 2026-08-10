@@ -660,12 +660,15 @@ class Assistant:
                 )
                 hc_outcome = hc.outcome
                 hc_reason = hc.reason
+                hc_evidence = list(hc.evidence)
             elif hc_read.error:
                 hc_outcome = "unknown"
                 hc_reason = hc_read.error
+                hc_evidence = []
             else:
                 hc_outcome = "unknown"
                 hc_reason = "No Hard Constraints file or file is empty"
+                hc_evidence = []
 
             if needs_prefs_judge:
                 pref = self._llm_judge.judge_preference(
@@ -674,12 +677,15 @@ class Assistant:
                 )
                 preference = pref.preference
                 preference_reason = pref.reason
+                preference_evidence = list(pref.evidence)
             elif prefs_read.error:
                 preference = None
                 preference_reason = prefs_read.error
+                preference_evidence = []
             else:
                 preference = None
                 preference_reason = "No Preferences file or file is empty"
+                preference_evidence = []
 
             relevance_result = self._llm_judge.judge_relevance(
                 job_detail_fields=job_fields,
@@ -700,6 +706,8 @@ class Assistant:
             preference_reason=preference_reason,
             relevance=relevance_result.relevance,
             evidence=list(relevance_result.evidence),
+            hard_constraint_evidence=hc_evidence,
+            preference_evidence=preference_evidence,
         )
         self._catalog_store.save_match_assessment(assessment)
         return "saved"

@@ -91,16 +91,24 @@ The live judge or tailor cannot run — missing credentials or provider failure.
 _Avoid_: offline mode, fallback scorer, Fake assessment (as a user-facing mode)
 
 **Match Assessment**:
-The full fit judgment for one Job Posting on a dedicated detail page (not only the Assessment Summary list): Hard Constraint with short reason, Preference with short reason, Relevance, and Evidence, with actions to Prepare or Delete. Accordion or richer navigation is out of v1. On Master CV, Hard Constraints file, or Preferences file change (content or path clear), all assessments go Pending and re-judge asynchronously; new or detail-changed Crawl postings start Pending then re-judge asynchronously (Crawl success does not mean assessments finished). Judge failure leaves Pending or keeps the prior complete assessment — never a half-assessed final row. Otherwise the last Assessment is kept. Rules: ADR-0014.
-_Avoid_: score, analysis, match result, ATS score, accordion (v1)
+The full fit judgment for one Job Posting on a dedicated detail page (not only the Assessment Summary list): Hard Constraint with short reason and Hard Constraint Evidence, Preference with short reason and Preference Evidence, Relevance with Evidence, and actions to Prepare or Delete. Accordion or richer navigation stays out until a later theme. On Master CV, Hard Constraints file, or Preferences file change (content or path clear), all assessments go Pending and re-judge asynchronously; new or detail-changed Crawl postings start Pending then re-judge asynchronously (Crawl success does not mean assessments finished). Judge failure leaves Pending or keeps the prior complete assessment — never a half-assessed final row. Otherwise the last Assessment is kept. Evidence lists: ADR-0016. Freshness: ADR-0014.
+_Avoid_: score, analysis, match result, ATS score, accordion (for this theme)
 
 **Evidence pair**:
-One justification unit for Relevance: a Job Posting excerpt, a Master CV or Candidate Snapshot excerpt (or “not found”), and a one-line role — supports or weakens Relevance. Hard Constraint and Preference judgments use their short reasons on the Match Assessment (not a separate stored Evidence list in v1).
-_Avoid_: quote pair, citation row, Hard Constraint evidence list, Preference evidence list
+One justification unit: a Job Posting excerpt, a signal-specific counterpart excerpt (or “not found” / “not stated”), and a one-line role. Counterpart is Master CV / Candidate Snapshot for Relevance, a Hard Constraints file line for Hard Constraint, or a Preferences file line for Preference — never the wrong source for that signal.
+_Avoid_: quote pair, citation row
+
+**Hard Constraint Evidence**:
+The short list of Evidence pairs for the Hard Constraint judgment on a Match Assessment: Hard Constraints line ↔ Job Posting excerpt (or “not stated”) + role. No CV excerpts. Rubric: ADR-0010.
+_Avoid_: Hard Constraint quotes, deal-breaker citations
+
+**Preference Evidence**:
+The short list of Evidence pairs for the Preference judgment on a Match Assessment: Preferences line ↔ Job Posting excerpt + role. No CV excerpts. Rubric: ADR-0008.
+_Avoid_: Preference quotes, desire citations
 
 **Evidence**:
 The short list of Relevance Evidence pairs in a Match Assessment (about three to seven) used to decide Prepare vs skip; deeper gaps belong in the Gap Report after prepare.
-_Avoid_: quote, reference, highlight (alone)
+_Avoid_: quote, reference, highlight (alone), Relevance Evidence list (say Evidence)
 
 **Gap Report**:
 Per Job Posting, a list of gaps: each item is a Requirement from the posting, a status (missing or partial), Evidence from the Master CV (or “not found”), and a non-fictional Suggestion. Hard Constraint failures appear when the Hard Constraint failed. Never invents experience. Built at Prepare only. Rules: ADR-0011.

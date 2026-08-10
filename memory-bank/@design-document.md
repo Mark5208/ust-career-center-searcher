@@ -1,8 +1,8 @@
 # Design document — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0015`. Parent spec: GitHub issue #1.
+Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0016`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0015 Prepare/assessment/CV/LLM slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with Relevance Evidence + HC/Preference reasons), Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` (env key; Unavailable when missing; Fake only in tests). Accordion / richer Match Assessment nav remains out of v1.
+**Docs vs code:** ADRs 0005–0016 Prepare/assessment/CV/LLM slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with Relevance Evidence + Hard Constraint / Preference Evidence + short reasons), Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` (env key; Unavailable when missing; Fake only in tests). Accordion / richer Match Assessment nav remains out of v1.
 
 ## Primary seam
 
@@ -43,6 +43,14 @@ Implemented at the `LlmJudge.judge_hard_constraint` call site (live OpenAI-compa
 ### Judge rubrics (ADR-0008)
 
 Preference and Relevance call sites enforce input isolation (`judge_preference` never sees CV; `judge_relevance` never sees Preferences). Band criteria live in the live judge prompt; Fake scripts bands for tests.
+
+### Hard Constraint / Preference Evidence on Match Assessment (ADR-0016)
+
+Implemented through `Assistant` / `MatchAssessment` / `CatalogStore` (persisted on save; UI reads stored lists only):
+
+- Hard Constraint Evidence and Preference Evidence lists on Match Assessment detail with signal-specific counterpart labels; empty lists allowed (no padding from short reasons).
+- Assessment Summary stays bands-only; Preparation Packet keeps a compact strip (bands + short reasons) with a link to Match Assessment for full lists.
+- Pre-upgrade complete rows load empty HC/Preference Evidence until a natural rejudge. Accordion remains parked. Parent: GitHub #19.
 
 ### LLM runtime (ADR-0015)
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 ConstraintOutcome = Literal["pass", "fail", "unknown"]
@@ -56,3 +56,5 @@ class MatchAssessment:
     preference_reason: str
     relevance: RelevanceBand
     evidence: list[EvidencePair]
+    hard_constraint_evidence: list[EvidencePair] = field(default_factory=list)
+    preference_evidence: list[EvidencePair] = field(default_factory=list)

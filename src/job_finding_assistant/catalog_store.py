@@ -81,36 +81,54 @@ class CatalogStore:
                     preference TEXT,
                     preference_reason TEXT NOT NULL,
                     relevance TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL
+                    evidence_json TEXT NOT NULL,
+                    hard_constraint_evidence_json TEXT NOT NULL DEFAULT '[]',
+                    preference_evidence_json TEXT NOT NULL DEFAULT '[]'
                 )
                 """
             )
             self._migrate_match_assessments(connection)
 
     def _migrate_match_assessments(self, connection: sqlite3.Connection) -> None:
-        """Upgrade legacy named-constraint schema to freeform three-signal rows."""
+        """Upgrade legacy Match Assessment schemas; keep empty HC/Preference Evidence."""
         existing = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(match_assessments)").fetchall()
         }
         if not existing:
             return
-        if "preference" in existing and "hard_constraint_reason" in existing:
-            return
-        connection.execute("DROP TABLE IF EXISTS match_assessments")
-        connection.execute(
-            """
-            CREATE TABLE match_assessments (
-                job_posting_id TEXT PRIMARY KEY,
-                hard_constraint_outcome TEXT NOT NULL,
-                hard_constraint_reason TEXT NOT NULL,
-                preference TEXT,
-                preference_reason TEXT NOT NULL,
-                relevance TEXT NOT NULL,
-                evidence_json TEXT NOT NULL
+        if "preference" not in existing or "hard_constraint_reason" not in existing:
+            connection.execute("DROP TABLE IF EXISTS match_assessments")
+            connection.execute(
+                """
+                CREATE TABLE match_assessments (
+                    job_posting_id TEXT PRIMARY KEY,
+                    hard_constraint_outcome TEXT NOT NULL,
+                    hard_constraint_reason TEXT NOT NULL,
+                    preference TEXT,
+                    preference_reason TEXT NOT NULL,
+                    relevance TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    hard_constraint_evidence_json TEXT NOT NULL DEFAULT '[]',
+                    preference_evidence_json TEXT NOT NULL DEFAULT '[]'
+                )
+                """
             )
-            """
-        )
+            return
+        if "hard_constraint_evidence_json" not in existing:
+            connection.execute(
+                """
+                ALTER TABLE match_assessments
+                ADD COLUMN hard_constraint_evidence_json TEXT NOT NULL DEFAULT '[]'
+                """
+            )
+        if "preference_evidence_json" not in existing:
+            connection.execute(
+                """
+                ALTER TABLE match_assessments
+                ADD COLUMN preference_evidence_json TEXT NOT NULL DEFAULT '[]'
+                """
+            )
 
     def _ensure_job_posting_columns(self, connection: sqlite3.Connection) -> None:
         existing = {
@@ -192,16 +210,11 @@ class CatalogStore:
 
     def save_match_assessment(self, assessment: MatchAssessment) -> None:
         """Insert or replace the Match Assessment for one Job Posting."""
-        evidence_json = json.dumps(
-            [
-                {
-                    "job_excerpt": item.job_excerpt,
-                    "candidate_excerpt": item.candidate_excerpt,
-                    "role": item.role,
-                }
-                for item in assessment.evidence
-            ]
+        evidence_json = _evidence_to_json(assessment.evidence)
+        hard_constraint_evidence_json = _evidence_to_json(
+            assessment.hard_constraint_evidence
         )
+        preference_evidence_json = _evidence_to_json(assessment.preference_evidence)
         with self._connect() as connection:
             connection.execute(
                 """
@@ -212,16 +225,20 @@ class CatalogStore:
                     preference,
                     preference_reason,
                     relevance,
-                    evidence_json
+                    evidence_json,
+                    hard_constraint_evidence_json,
+                    preference_evidence_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_posting_id) DO UPDATE SET
                     hard_constraint_outcome = excluded.hard_constraint_outcome,
                     hard_constraint_reason = excluded.hard_constraint_reason,
                     preference = excluded.preference,
                     preference_reason = excluded.preference_reason,
                     relevance = excluded.relevance,
-                    evidence_json = excluded.evidence_json
+                    evidence_json = excluded.evidence_json,
+                    hard_constraint_evidence_json = excluded.hard_constraint_evidence_json,
+                    preference_evidence_json = excluded.preference_evidence_json
                 """,
                 (
                     assessment.job_posting_id,
@@ -231,6 +248,8 @@ class CatalogStore:
                     assessment.preference_reason,
                     assessment.relevance,
                     evidence_json,
+                    hard_constraint_evidence_json,
+                    preference_evidence_json,
                 ),
             )
 
@@ -246,7 +265,9 @@ class CatalogStore:
                     preference,
                     preference_reason,
                     relevance,
-                    evidence_json
+                    evidence_json,
+                    hard_constraint_evidence_json,
+                    preference_evidence_json
                 FROM match_assessments
                 WHERE job_posting_id = ?
                 """,
@@ -254,7 +275,6 @@ class CatalogStore:
             ).fetchone()
         if row is None:
             return None
-        evidence_raw = json.loads(row["evidence_json"])
         preference_raw = row["preference"]
         return MatchAssessment(
             job_posting_id=row["job_posting_id"],
@@ -265,14 +285,11 @@ class CatalogStore:
             preference=cast(PreferenceBand, preference_raw) if preference_raw else None,
             preference_reason=row["preference_reason"],
             relevance=cast(RelevanceBand, row["relevance"]),
-            evidence=[
-                EvidencePair(
-                    job_excerpt=item["job_excerpt"],
-                    candidate_excerpt=item["candidate_excerpt"],
-                    role=item["role"],
-                )
-                for item in evidence_raw
-            ],
+            evidence=_evidence_from_json(row["evidence_json"]),
+            hard_constraint_evidence=_evidence_from_json(
+                row["hard_constraint_evidence_json"]
+            ),
+            preference_evidence=_evidence_from_json(row["preference_evidence_json"]),
         )
 
     def get_candidate_fingerprints(self) -> dict[str, str | None]:
@@ -454,6 +471,32 @@ class CatalogStore:
                 """,
                 (_crawl_filters_to_json(filters),),
             )
+
+
+def _evidence_to_json(pairs: list[EvidencePair]) -> str:
+    return json.dumps(
+        [
+            {
+                "job_excerpt": item.job_excerpt,
+                "candidate_excerpt": item.candidate_excerpt,
+                "role": item.role,
+            }
+            for item in pairs
+        ]
+    )
+
+
+def _evidence_from_json(raw: str | None) -> list[EvidencePair]:
+    if not raw:
+        return []
+    return [
+        EvidencePair(
+            job_excerpt=item["job_excerpt"],
+            candidate_excerpt=item["candidate_excerpt"],
+            role=item["role"],
+        )
+        for item in json.loads(raw)
+    ]
 
 
 def _crawl_filters_to_json(filters: CrawlFilters) -> str:

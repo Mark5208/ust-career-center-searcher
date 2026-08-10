@@ -99,6 +99,21 @@
         </p>
         <p>{{ match_assessment.hard_constraint_reason }}</p>
       </div>
+      <h2>Hard Constraint Evidence</h2>
+      {% if match_assessment.hard_constraint_evidence %}
+      <ul class="evidence">
+        {% for pair in match_assessment.hard_constraint_evidence %}
+        <li>
+          <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
+          <p><strong>Hard Constraints file:</strong> {{ pair.candidate_excerpt }}</p>
+          <p>{{ pair.role }}</p>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No Hard Constraint Evidence pairs.</p>
+      {% endif %}
+
       <div class="signal">
         <p>
           <strong>Preference:</strong>
@@ -106,10 +121,24 @@
         </p>
         <p>{{ match_assessment.preference_reason }}</p>
       </div>
+      <h2>Preference Evidence</h2>
+      {% if match_assessment.preference_evidence %}
+      <ul class="evidence">
+        {% for pair in match_assessment.preference_evidence %}
+        <li>
+          <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
+          <p><strong>Preferences file:</strong> {{ pair.candidate_excerpt }}</p>
+          <p>{{ pair.role }}</p>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No Preference Evidence pairs.</p>
+      {% endif %}
+
       <div class="signal">
         <p><strong>Relevance:</strong> {{ match_assessment.relevance }}</p>
       </div>
-
       <h2>Relevance Evidence</h2>
       {% if match_assessment.evidence %}
       <ul class="evidence">
