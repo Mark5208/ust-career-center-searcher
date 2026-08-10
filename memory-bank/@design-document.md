@@ -46,7 +46,7 @@ Preference and Relevance call sites enforce input isolation (`judge_preference` 
 
 ### LLM runtime (ADR-0015)
 
-`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse/timeout failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). Assessment Summary `GET /` uses `load_assessment_summary_catalog` (one refresh + at most one Pending rejudge + progress banner); failed/skipped heads are deferred so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no LLM batch pacing in v1.
+`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Provider/parse/timeout failures → Pending or keep prior assessment; Prepare tailor failures stay atomic with a short non-secret **LLM Unavailable** reason on the catalog (and Prepare error). Assessment Summary `GET /` uses `load_assessment_summary_catalog` (one refresh + at most five Pending rejudge attempts + progress banner; early-stop that load on LLM Unavailable); `rejudge_pending_assessments` stays one Pending per call for Crawl / file-change. Failed/skipped heads are deferred so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no confirm-before-batch; no LLM batch pacing beyond sequential in-request calls.
 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 
