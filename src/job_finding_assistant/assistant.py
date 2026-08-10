@@ -111,12 +111,16 @@ class AssessmentSummaryCatalogRow:
 
 @dataclass(frozen=True)
 class AssessmentSummaryCatalog:
-    """Catalog page payload: rows, one-Pending rejudge progress, LLM Unavailable."""
+    """Catalog page payload: rows, Pending rejudge progress, LLM Unavailable."""
 
     rows: list[AssessmentSummaryCatalogRow]
     processed_this_load: int
     pending_remaining: int
     llm_unavailable_reason: str | None
+
+
+# Assessment Summary GET / may process this many Pending heads per catalog load.
+_CATALOG_REJUDGE_BUDGET = 5
 
 
 class Assistant:
@@ -174,12 +178,13 @@ class Assistant:
         include_closed: bool = False,
         include_passed_deadlines: bool = False,
     ) -> AssessmentSummaryCatalog:
-        """Load Assessment Summary catalog: one refresh, one Pending rejudge, rows + progress.
+        """Load Assessment Summary catalog: one refresh, up to five Pending rejudges, rows + progress.
 
         Intended for GET / only. Match Assessment detail must not call this (no queue advance).
+        On LLM Unavailable for an attempt, stop further attempts for this load (early-stop).
         """
         self.refresh_candidate_file_state()
-        processed = self._rejudge_one_pending_after_refresh()
+        processed = self._rejudge_pending_after_refresh(budget=_CATALOG_REJUDGE_BUDGET)
         summaries = self._list_assessment_summaries_after_refresh(
             include_closed=include_closed,
             include_passed_deadlines=include_passed_deadlines,
@@ -478,8 +483,8 @@ class Assistant:
     def rejudge_pending_assessments(self) -> int:
         """Opportunistically judge Pending Match Assessments (after Crawl / file change).
 
-        Budgets at most one Pending Job Posting per call so catalog GET / cannot block
-        on a full LLM batch (ADR-0015). Refresh again to continue the queue.
+        Budgets at most one Pending Job Posting per call so Crawl / file-change paths
+        are not stacked with a five-call batch (ADR-0015). Refresh again to continue.
 
         When a posting fails or is skipped, it is deferred for this process so later
         Pending ids can still advance; after a full pass the deferred heads are retried.
@@ -488,13 +493,31 @@ class Assistant:
         Prefer ``load_assessment_summary_catalog`` for the Assessment Summary page.
         """
         self.refresh_candidate_file_state()
-        return self._rejudge_one_pending_after_refresh()
+        return self._rejudge_pending_after_refresh(budget=1)
 
-    def _rejudge_one_pending_after_refresh(self) -> int:
+    def _rejudge_pending_after_refresh(self, *, budget: int) -> int:
+        """Process up to ``budget`` Pending heads sequentially after refresh.
+
+        Each attempt (saved, skipped, or failure) consumes one unit. On LLM Unavailable
+        (``llm_failed``), stop further attempts for this call (early-stop).
+        """
+        processed = 0
+        for _ in range(budget):
+            outcome = self._rejudge_one_pending_after_refresh()
+            if outcome is None:
+                break
+            processed += 1
+            if outcome == "llm_failed":
+                break
+        return processed
+
+    def _rejudge_one_pending_after_refresh(
+        self,
+    ) -> Literal["saved", "skipped", "llm_failed"] | None:
         pending = self._catalog_store.list_pending_job_posting_ids()
         if not pending:
             self._rejudge_skip_ids.clear()
-            return 0
+            return None
         candidates = [job_id for job_id in pending if job_id not in self._rejudge_skip_ids]
         if not candidates:
             # Full pass completed with failures still Pending — retry from the head.
@@ -508,7 +531,7 @@ class Assistant:
         else:
             # llm_failed / skipped: leave Pending, advance past this id next call.
             self._rejudge_skip_ids.add(job_id)
-        return 1
+        return outcome
 
     def _list_assessment_summaries_after_refresh(
         self,

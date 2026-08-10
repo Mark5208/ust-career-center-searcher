@@ -1,6 +1,5 @@
 """UI route talks only to Assistant for Assessment Summary listing."""
 
-import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -351,7 +350,7 @@ def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -
 
 
 def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
-    """Catalog GET must not block on judging every Pending posting (ADR-0015 opportunistic)."""
+    """Catalog GET budgets at most five Pending postings (ADR-0015 opportunistic)."""
     cv_path = tmp_path / "master_CV.yaml"
     cv_path.write_text(
         "cv:\n  name: Test\n  sections:\n    experience:\n      - company: X\n        position: Y\n",
@@ -359,19 +358,13 @@ def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
     )
     entries = [
         JobListEntry(
-            id="86534",
-            title="Engineer A",
-            employer="Corp A",
+            id=str(86534 + i),
+            title=f"Engineer {i}",
+            employer=f"Corp {i}",
             posting_date="2026-07-01",
             application_deadline="2026-12-31",
-        ),
-        JobListEntry(
-            id="86535",
-            title="Engineer B",
-            employer="Corp B",
-            posting_date="2026-07-01",
-            application_deadline="2026-12-31",
-        ),
+        )
+        for i in range(6)
     ]
     details = {
         entry.id: JobPostingDetail(
@@ -384,7 +377,7 @@ def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
         )
         for entry in entries
     }
-    judge = FakeLlmJudge(relevance="Strong", delay_seconds=2.0)
+    judge = FakeLlmJudge(relevance="Strong")
     master_cv = FakeMasterCvStore()
     assistant = Assistant(
         catalog_store=CatalogStore(tmp_path / "catalog.db"),
@@ -401,17 +394,16 @@ def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
     )
     assistant.set_master_cv_path(str(cv_path))
     assistant.run_crawl()
-    assert len(assistant.list_assessment_summaries()) == 2
+    assert len(assistant.list_assessment_summaries()) == 6
     assert all(row.pending for row in assistant.list_assessment_summaries())
 
     client = TestClient(create_app(assistant))
-    started = time.perf_counter()
     response = client.get("/")
-    elapsed = time.perf_counter() - started
 
     assert response.status_code == 200
-    assert elapsed < 3.0
-    assert judge.judge_calls == 1
+    assert judge.judge_calls == 5
+    assert "Processed 5 Pending this load" in response.text
+    assert "1 still Pending" in response.text
     pending_after = sum(
         1 for row in assistant.list_assessment_summaries() if row.pending
     )
@@ -711,6 +703,7 @@ def test_match_assessment_detail_page_uses_assistant_and_shows_signals() -> None
 
     assert response.status_code == 200
     assert assistant.get_match_assessment_calls == ["86534"]
+    assert assistant.catalog_load_calls == 0
     assert "Match Assessment" in response.text
     assert "System Engineer" in response.text
     assert "Example Corp" in response.text
@@ -751,6 +744,7 @@ def test_match_assessment_detail_pending_blocks_prepare_and_shows_clear_state() 
 
     assert response.status_code == 200
     assert assistant.get_match_assessment_calls == ["86534"]
+    assert assistant.catalog_load_calls == 0
     assert "Pending" in response.text
     assert "Prepare unavailable" in response.text
     assert "LLM Unavailable: API key not configured" in response.text
