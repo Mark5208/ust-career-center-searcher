@@ -9,7 +9,6 @@ from job_finding_assistant.assistant import Assistant
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.fakes import (
     FakeConstraintFilesStore,
-    FakeCrawlPacer,
     FakeJobBoardSession,
     FakeLlmCvTailor,
     FakeLlmJudge,
@@ -49,7 +48,6 @@ def _assistant(
         llm_judge=llm_judge or FakeLlmJudge(relevance="Strong"),
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=constraint_files or FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
     )
 
 
@@ -597,10 +595,9 @@ def test_master_cv_yaml_content_change_marks_all_assessments_pending(
     )
 
     assert assistant.list_assessment_summaries()[0].pending is True
+    snapshot = assistant.get_candidate_files().snapshot
     assert "Staff platform engineer" in (
-        assistant.get_candidate_snapshot().experience[0]
-        if assistant.get_candidate_snapshot()
-        else ""
+        snapshot.experience[0] if snapshot else ""
     )
 
 
@@ -648,9 +645,9 @@ def test_invalid_master_cv_yaml_keeps_relevance_pending_with_error(
     assert len(summaries) == 1
     assert summaries[0].pending is True
     assert assistant.can_prepare(summaries[0].job_posting_id) is False
-    assert assistant.get_candidate_snapshot() is None
-    errors = assistant.get_candidate_file_errors()
-    assert any("Master CV" in error for error in errors)
+    files = assistant.get_candidate_files()
+    assert files.snapshot is None
+    assert any("Master CV" in error for error in files.errors)
     assert broken.read_text(encoding="utf-8").startswith("cv: [")
 
 
@@ -672,9 +669,9 @@ def test_unreadable_master_cv_keeps_relevance_pending_with_error(tmp_path: Path)
     assistant.rejudge_pending_assessments()
 
     assert assistant.list_assessment_summaries()[0].pending is True
-    assert assistant.get_candidate_snapshot() is None
-    errors = assistant.get_candidate_file_errors()
-    assert any("Master CV" in error for error in errors)
+    files = assistant.get_candidate_files()
+    assert files.snapshot is None
+    assert any("Master CV" in error for error in files.errors)
 
 
 def test_unreadable_hard_constraints_path_is_unknown_not_pending(
@@ -694,7 +691,7 @@ def test_unreadable_hard_constraints_path_is_unknown_not_pending(
     assert len(judge.hard_constraint_calls) == 0
     assert any(
         "not found" in error.lower() or "File not found" in error
-        for error in assistant.get_candidate_file_errors()
+        for error in assistant.get_candidate_files().errors
     )
 
 
@@ -746,7 +743,6 @@ def test_crawl_detail_change_marks_pending_without_staling_packets(
         llm_judge=judge2,
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=FakeCrawlPacer(),
     )
 
     assistant.run_crawl()

@@ -20,7 +20,6 @@ def _assistant(
     tmp_path: Path,
     *,
     job_board: FakeJobBoardSession | None = None,
-    crawl_pacer: FakeCrawlPacer | None = None,
 ) -> Assistant:
     return Assistant(
         catalog_store=CatalogStore(tmp_path / "catalog.db"),
@@ -29,7 +28,6 @@ def _assistant(
         llm_judge=FakeLlmJudge(),
         llm_cv_tailor=FakeLlmCvTailor(),
         constraint_files=FakeConstraintFilesStore(),
-        crawl_pacer=crawl_pacer or FakeCrawlPacer(),
     )
 
 
@@ -142,6 +140,7 @@ def test_assistant_incremental_crawl_stores_job_postings_in_catalog(tmp_path: Pa
 
 
 def test_assistant_pauses_before_each_detail_fetch(tmp_path: Path) -> None:
+    pacer = FakeCrawlPacer()
     job_board = FakeJobBoardSession(
         authenticated=True,
         list_entries=[
@@ -158,9 +157,9 @@ def test_assistant_pauses_before_each_detail_fetch(tmp_path: Path) -> None:
                 application_deadline="2026-12-31",
             ),
         ],
+        crawl_pacer=pacer,
     )
-    pacer = FakeCrawlPacer()
-    assistant = _assistant(tmp_path, job_board=job_board, crawl_pacer=pacer)
+    assistant = _assistant(tmp_path, job_board=job_board)
 
     outcome = assistant.run_crawl()
 
@@ -180,9 +179,11 @@ def test_assistant_does_not_pause_when_incremental_skips_unchanged_detail(
         posting_date="2026-07-01",
         application_deadline="2026-12-31",
     )
-    job_board = FakeJobBoardSession(authenticated=True, list_entries=[entry])
     pacer = FakeCrawlPacer()
-    assistant = _assistant(tmp_path, job_board=job_board, crawl_pacer=pacer)
+    job_board = FakeJobBoardSession(
+        authenticated=True, list_entries=[entry], crawl_pacer=pacer
+    )
+    assistant = _assistant(tmp_path, job_board=job_board)
     assert assistant.run_crawl().stored_count == 1
     assert pacer.before_detail_calls == 1
     pacer.before_detail_calls = 0

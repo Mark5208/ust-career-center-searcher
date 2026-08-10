@@ -108,6 +108,7 @@ Through `Assistant` and `/candidate` UI:
 - Rebuild inspectable Candidate Snapshot from YAML (contact from header fields; education / experience / projects / skills/tools sections as written); not hand-editable.
 - Invalid or unreadable YAML → no Snapshot, Relevance stays Pending, clear path/content error (ADR-0014).
 - Set Hard Constraints and Preferences plain-text file paths (`DiskConstraintFilesStore`); tool reads only; empty/missing → unknown without judge.
+- Public reads use `get_candidate_files()` → `CandidateFilesView` (paths + Snapshot + errors); mutations stay named set/clear (no Master CV clear).
 - Structured languages / locations / Gap Tolerance Preferences form removed (ADR-0005).
 - LaTeX Master CV is not a supported v1 format.
 - Python ≥3.12; `rendercv` + PyYAML dependencies (PDF render is a Prepare concern, shipped with packets).
@@ -122,7 +123,7 @@ Through `Assistant` and `/crawl` UI, with primary tests on a fake `JobBoardSessi
 - Narrow filters only add/update; Closing-capable (unfiltered or Active-Job-only) completed syncs may mark absent Open postings Closed.
 - Auth-loss mid-Crawl → partial success; keep stored work; do not mark untouched postings Closed.
 - Live board: Playwright `JobBoardSession` using selectors from `.scratch/job-board-dom.md`.
-- `CrawlPacer` random delays before detail fetches and between list pages (tested via recording fake; no real sleep in primary tests).
+- `CrawlPacer` random delays before detail fetches and between list pages, injected into `JobBoardSession` only (tested via recording fake on the board; no real sleep in primary tests).
 
 ## Assessment slice (issue #11) — as shipped in code
 

@@ -15,6 +15,7 @@ from job_finding_assistant.assistant import (
     AssessmentSummary,
     AssessmentSummaryCatalog,
     Assistant,
+    CandidateFilesView,
     CrawlFilters,
     CrawlOutcome,
     DeleteNeedsConfirm,
@@ -23,7 +24,6 @@ from job_finding_assistant.assistant import (
     PrepareFailedError,
     PrepareNeedsConfirm,
 )
-from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.llm_runtime import build_llm_ports, load_llm_runtime_config
@@ -78,17 +78,11 @@ class SupportsAssistantUi(Protocol):
     def delete(self, job_posting_id: str, *, confirm: bool = False) -> None:
         """Hard-remove Job Posting, Match Assessment, and Preparation Packet."""
 
-    def get_master_cv_path(self) -> str | None:
-        """Return the configured Master CV path."""
+    def get_candidate_files(self) -> CandidateFilesView:
+        """Return paths, Candidate Snapshot, and path/read errors."""
 
     def set_master_cv_path(self, path: str) -> None:
         """Set the Master CV path without overwriting the file."""
-
-    def get_candidate_snapshot(self) -> CandidateSnapshot | None:
-        """Return the Candidate Snapshot."""
-
-    def get_hard_constraints_path(self) -> str | None:
-        """Return the Hard Constraints file path."""
 
     def set_hard_constraints_path(self, path: str) -> None:
         """Set the Hard Constraints file path."""
@@ -96,17 +90,11 @@ class SupportsAssistantUi(Protocol):
     def clear_hard_constraints_path(self) -> None:
         """Clear the Hard Constraints path."""
 
-    def get_preferences_path(self) -> str | None:
-        """Return the Preferences file path."""
-
     def set_preferences_path(self, path: str) -> None:
         """Set the Preferences file path."""
 
     def clear_preferences_path(self) -> None:
         """Clear the Preferences path."""
-
-    def get_candidate_file_errors(self) -> list[str]:
-        """Return path/read errors for candidate files."""
 
     def get_llm_unavailable_reason(self) -> str | None:
         """Short non-secret LLM Unavailable reason, if any."""
@@ -319,15 +307,16 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
     @app.get("/candidate", response_class=HTMLResponse)
     def candidate_page(request: Request) -> HTMLResponse:
         current = request.app.state.assistant
+        files = current.get_candidate_files()
         return _TEMPLATES.TemplateResponse(
             request,
             "candidate.html",
             {
-                "master_cv_path": current.get_master_cv_path() or "",
-                "snapshot": current.get_candidate_snapshot(),
-                "hard_constraints_path": current.get_hard_constraints_path() or "",
-                "preferences_path": current.get_preferences_path() or "",
-                "candidate_file_errors": current.get_candidate_file_errors(),
+                "master_cv_path": files.master_cv_path or "",
+                "snapshot": files.snapshot,
+                "hard_constraints_path": files.hard_constraints_path or "",
+                "preferences_path": files.preferences_path or "",
+                "candidate_file_errors": files.errors,
             },
         )
 
@@ -451,7 +440,6 @@ def build_default_assistant(db_path: Path | None = None) -> Assistant:
         llm_judge=llm_judge,
         llm_cv_tailor=llm_cv_tailor,
         constraint_files=DiskConstraintFilesStore(data_dir / "constraint_files_state"),
-        crawl_pacer=crawl_pacer,
         packet_store_dir=data_dir / "packets",
     )
 
