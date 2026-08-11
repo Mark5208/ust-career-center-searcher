@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
-from job_finding_assistant.catalog_store import CatalogStore
+from job_finding_assistant.catalog_store import CatalogStore, JobPosting
 from job_finding_assistant.constraint_files import fingerprint_path
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
@@ -30,10 +29,15 @@ from job_finding_assistant.preparation_packet import PreparationPacket
 
 __all__ = [
     "AssessmentSummary",
+    "AssessmentSummaryCatalog",
+    "AssessmentSummaryCatalogRow",
     "Assistant",
+    "CandidateFilesView",
     "CrawlFilters",
     "CrawlOutcome",
     "DeleteNeedsConfirm",
+    "MatchAssessmentPage",
+    "PreparationPacketPage",
     "PreparationPacketView",
     "PrepareBlockedError",
     "PrepareFailedError",
@@ -90,6 +94,26 @@ class AssessmentSummary:
     has_preparation_packet: bool = False
     preparation_packet_stale: bool = False
     application_deadline: str | None = None
+
+
+@dataclass(frozen=True)
+class MatchAssessmentPage:
+    """Match Assessment detail page payload (no opportunistic rejudge)."""
+
+    summary: AssessmentSummary
+    match_assessment: MatchAssessment | None
+    can_prepare: bool
+    llm_unavailable_reason: str | None
+
+
+@dataclass(frozen=True)
+class PreparationPacketPage:
+    """Preparation Packet page payload with posting title/employer."""
+
+    title: str
+    employer: str
+    packet: PreparationPacket
+    match_assessment: MatchAssessment | None
 
 
 @dataclass(frozen=True)
@@ -213,6 +237,31 @@ class Assistant:
         self._refresh_candidate_file_state()
         return self._catalog_store.get_match_assessment(job_posting_id)
 
+    def load_match_assessment_page(
+        self, job_posting_id: str
+    ) -> MatchAssessmentPage | None:
+        """Load Match Assessment detail page (no opportunistic rejudge).
+
+        Returns None when the Job Posting is unknown. Catalog load remains the
+        batch rejudge entry for Assessment Summary.
+        """
+        self._refresh_candidate_file_state()
+        summary: AssessmentSummary | None = None
+        for row in self._list_assessment_summaries_after_refresh(
+            include_closed=True, include_passed_deadlines=True
+        ):
+            if row.job_posting_id == job_posting_id:
+                summary = row
+                break
+        if summary is None:
+            return None
+        return MatchAssessmentPage(
+            summary=summary,
+            match_assessment=self._catalog_store.get_match_assessment(job_posting_id),
+            can_prepare=self.can_prepare(job_posting_id),
+            llm_unavailable_reason=self.get_llm_unavailable_reason(),
+        )
+
     def prepare(
         self,
         job_posting_id: str,
@@ -268,20 +317,14 @@ class Assistant:
             raise PrepareFailedError(f"Master CV unreadable: {exc}") from exc
 
         posting = self._catalog_store.get_job_posting(job_posting_id)
-        if posting is None or not posting.get("detail_json"):
+        if posting is None or not posting.has_detail():
             raise PrepareFailedError("Job Posting detail is missing")
-        detail_fields = json.loads(posting["detail_json"] or "{}")
-        job_fields = {
-            **detail_fields,
-            "title": posting.get("title") or "",
-            "employer": posting.get("employer") or "",
-        }
 
         try:
             tailor_result = self._llm_cv_tailor.tailor(
                 master_cv_yaml=master_cv_yaml,
                 candidate_snapshot=snapshot,
-                job_detail_fields=job_fields,
+                job_detail_fields=posting.fields_for_llm(),
                 relevance_evidence=list(assessment.evidence),
                 hard_constraint_outcome=assessment.hard_constraint_outcome,
                 hard_constraint_reason=assessment.hard_constraint_reason,
@@ -317,6 +360,26 @@ class Assistant:
             match_assessment=self._catalog_store.get_match_assessment(job_posting_id),
         )
 
+    def load_preparation_packet_page(
+        self, job_posting_id: str
+    ) -> PreparationPacketPage | None:
+        """Load Preparation Packet page with title/employer (no opportunistic rejudge).
+
+        Returns None when no Preparation Packet exists.
+        """
+        view = self.get_preparation_packet(job_posting_id)
+        if view is None:
+            return None
+        posting = self._catalog_store.get_job_posting(job_posting_id)
+        title = posting.title if posting is not None else job_posting_id
+        employer = posting.employer if posting is not None else ""
+        return PreparationPacketPage(
+            title=title,
+            employer=employer,
+            packet=view.packet,
+            match_assessment=view.match_assessment,
+        )
+
     def get_tailored_yaml(self, job_posting_id: str) -> str | None:
         """Return Tailored CV YAML for download, or None when no packet."""
         packet = self._packet_store.get(job_posting_id)
@@ -338,8 +401,8 @@ class Assistant:
         posting = self._catalog_store.get_job_posting(job_posting_id)
         if posting is None:
             return
-        title = posting.get("title") or job_posting_id
-        employer = posting.get("employer") or ""
+        title = posting.title or job_posting_id
+        employer = posting.employer or ""
         has_packet = self._packet_store.get(job_posting_id) is not None
         if not confirm:
             parts = [f"Job Posting '{title} — {employer}'", "Match Assessment"]
@@ -436,30 +499,27 @@ class Assistant:
                 if _excluded_by_deadline_hardline(entry, filters.deadline_hardline):
                     continue
                 fingerprint = _list_fingerprint(entry)
-                existing = self._catalog_store.get_job_posting(entry.id)
-                if (
-                    not full_refresh
-                    and existing is not None
-                    and existing.get("list_fingerprint") == fingerprint
-                ):
-                    # Present on the list again → Open even when detail fetch is skipped.
-                    if existing.get("listing_status") != "Open":
-                        self._catalog_store.set_listing_status(entry.id, "Open")
+                presence = self._catalog_store.apply_crawl_list_presence(
+                    entry.id,
+                    list_fingerprint=fingerprint,
+                    full_refresh=full_refresh,
+                )
+                if presence == "unchanged":
                     continue
                 detail = self._job_board.fetch_job_detail(entry.id)
-                self._catalog_store.upsert_job_posting(
-                    job_posting_id=detail.id,
-                    title=detail.title,
-                    employer=detail.employer,
-                    listing_status="Open",
-                    deadline_status=_deadline_status(detail.application_deadline),
-                    posting_date=detail.posting_date,
-                    application_deadline=detail.application_deadline,
-                    detail_json=json.dumps(detail.fields),
-                    list_fingerprint=fingerprint,
+                self._catalog_store.commit_crawl_detail(
+                    JobPosting(
+                        id=detail.id,
+                        title=detail.title,
+                        employer=detail.employer,
+                        listing_status="Open",
+                        deadline_status=_deadline_status(detail.application_deadline),
+                        posting_date=detail.posting_date,
+                        application_deadline=detail.application_deadline,
+                        detail_fields=dict(detail.fields),
+                        list_fingerprint=fingerprint,
+                    )
                 )
-                # New or detail-changed → Pending; do not assess inside Crawl.
-                self._catalog_store.clear_match_assessment(detail.id)
                 stored_count += 1
         except AuthLostError:
             return CrawlOutcome(status="partial_success", stored_count=stored_count)
@@ -527,24 +587,26 @@ class Assistant:
         include_closed: bool = False,
         include_passed_deadlines: bool = False,
     ) -> list[AssessmentSummary]:
+        rows = self._catalog_store.list_assessment_summary_rows()
+        packet_flags = self._packet_store.presence_flags(row.id for row in rows)
         summaries: list[AssessmentSummary] = []
-        for row in self._catalog_store.list_assessment_summary_rows():
-            job_id = row["id"] or ""
-            packet = self._packet_store.get(job_id)
+        for row in rows:
+            presence = packet_flags.get(row.id)
+            has_packet = bool(presence and presence.has_preparation_packet)
             summaries.append(
                 AssessmentSummary(
-                    job_posting_id=job_id,
-                    title=row["title"] or "",
-                    employer=row["employer"] or "",
-                    listing_status=row["listing_status"] or "Open",
-                    deadline_status=row["deadline_status"] or "Unknown",
-                    pending=row.get("relevance") is None,
-                    hard_constraint_outcome=row.get("hard_constraint_outcome"),
-                    preference=row.get("preference"),
-                    relevance=row.get("relevance"),
-                    has_preparation_packet=packet is not None,
-                    preparation_packet_stale=bool(packet and packet.stale),
-                    application_deadline=row.get("application_deadline"),
+                    job_posting_id=row.id,
+                    title=row.title,
+                    employer=row.employer,
+                    listing_status=row.listing_status,
+                    deadline_status=row.deadline_status,
+                    pending=row.relevance is None,
+                    hard_constraint_outcome=row.hard_constraint_outcome,
+                    preference=row.preference,
+                    relevance=row.relevance,
+                    has_preparation_packet=has_packet,
+                    preparation_packet_stale=bool(presence and presence.stale),
+                    application_deadline=row.application_deadline,
                 )
             )
         filtered = [
@@ -612,16 +674,9 @@ class Assistant:
         self, job_posting_id: str
     ) -> Literal["saved", "skipped", "llm_failed"]:
         posting = self._catalog_store.get_job_posting(job_posting_id)
-        if posting is None or not posting.get("detail_json"):
+        if posting is None or not posting.has_detail():
             return "skipped"
-        detail_fields = json.loads(posting["detail_json"] or "{}")
-        title = posting.get("title") or ""
-        employer = posting.get("employer") or ""
-        job_fields = {
-            **detail_fields,
-            "title": title,
-            "employer": employer,
-        }
+        job_fields = posting.fields_for_llm()
 
         snapshot = self._master_cv.candidate_snapshot()
         if snapshot is None:

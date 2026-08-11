@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.match_assessment import (
@@ -16,6 +17,48 @@ from job_finding_assistant.match_assessment import (
     PreferenceBand,
     RelevanceBand,
 )
+
+
+@dataclass(frozen=True)
+class JobPosting:
+    """Catalog-shaped Job Posting (board fetch DTO remains JobPostingDetail)."""
+
+    id: str
+    title: str
+    employer: str
+    listing_status: str
+    deadline_status: str
+    posting_date: str | None
+    application_deadline: str | None
+    detail_fields: dict[str, str] = field(default_factory=dict)
+    list_fingerprint: str = ""
+
+    def fields_for_llm(self) -> dict[str, str]:
+        """Detail fields plus title/employer for judge and tailor."""
+        return {
+            **self.detail_fields,
+            "title": self.title,
+            "employer": self.employer,
+        }
+
+    def has_detail(self) -> bool:
+        """True when detail fields were stored from a detail fetch."""
+        return bool(self.detail_fields)
+
+
+@dataclass(frozen=True)
+class AssessmentSummaryRow:
+    """Catalog join row for Assessment Summary projection (no packet flags)."""
+
+    id: str
+    title: str
+    employer: str
+    listing_status: str
+    deadline_status: str
+    application_deadline: str | None
+    hard_constraint_outcome: str | None
+    preference: str | None
+    relevance: str | None
 
 
 class CatalogStore:
@@ -146,7 +189,7 @@ class CatalogStore:
                     f"ALTER TABLE job_postings ADD COLUMN {column} {sql_type}"
                 )
 
-    def list_assessment_summary_rows(self) -> list[dict[str, str | None]]:
+    def list_assessment_summary_rows(self) -> list[AssessmentSummaryRow]:
         """Return Job Posting rows joined with Match Assessment fields when present."""
         with self._connect() as connection:
             rows = connection.execute(
@@ -166,7 +209,20 @@ class CatalogStore:
                 ORDER BY p.id
                 """
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            AssessmentSummaryRow(
+                id=row["id"] or "",
+                title=row["title"] or "",
+                employer=row["employer"] or "",
+                listing_status=row["listing_status"] or "Open",
+                deadline_status=row["deadline_status"] or "Unknown",
+                application_deadline=row["application_deadline"],
+                hard_constraint_outcome=row["hard_constraint_outcome"],
+                preference=row["preference"],
+                relevance=row["relevance"],
+            )
+            for row in rows
+        ]
 
     def list_all_job_posting_ids(self) -> list[str]:
         """Return ids of all Job Postings (Open and Closed)."""
@@ -343,8 +399,8 @@ class CatalogStore:
                 ),
             )
 
-    def get_job_posting(self, job_posting_id: str) -> dict[str, str | None] | None:
-        """Return one stored Job Posting row, or None."""
+    def get_job_posting(self, job_posting_id: str) -> JobPosting | None:
+        """Return one stored Job Posting, or None."""
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -355,21 +411,27 @@ class CatalogStore:
                 """,
                 (job_posting_id,),
             ).fetchone()
-        return dict(row) if row is not None else None
+        if row is None:
+            return None
+        raw_detail = row["detail_json"] or ""
+        detail_fields: dict[str, str] = {}
+        if raw_detail:
+            parsed = json.loads(raw_detail)
+            if isinstance(parsed, dict):
+                detail_fields = {str(key): str(value) for key, value in parsed.items()}
+        return JobPosting(
+            id=row["id"],
+            title=row["title"] or "",
+            employer=row["employer"] or "",
+            listing_status=row["listing_status"] or "Open",
+            deadline_status=row["deadline_status"] or "Unknown",
+            posting_date=row["posting_date"],
+            application_deadline=row["application_deadline"],
+            detail_fields=detail_fields,
+            list_fingerprint=row["list_fingerprint"] or "",
+        )
 
-    def upsert_job_posting(
-        self,
-        *,
-        job_posting_id: str,
-        title: str,
-        employer: str,
-        listing_status: str,
-        deadline_status: str,
-        posting_date: str | None,
-        application_deadline: str | None,
-        detail_json: str,
-        list_fingerprint: str,
-    ) -> None:
+    def upsert_job_posting(self, posting: JobPosting) -> None:
         """Insert or update a Job Posting from Crawl detail fetch."""
         with self._connect() as connection:
             connection.execute(
@@ -390,17 +452,45 @@ class CatalogStore:
                     list_fingerprint = excluded.list_fingerprint
                 """,
                 (
-                    job_posting_id,
-                    title,
-                    employer,
-                    listing_status,
-                    deadline_status,
-                    posting_date,
-                    application_deadline,
-                    detail_json,
-                    list_fingerprint,
+                    posting.id,
+                    posting.title,
+                    posting.employer,
+                    posting.listing_status,
+                    posting.deadline_status,
+                    posting.posting_date,
+                    posting.application_deadline,
+                    json.dumps(posting.detail_fields),
+                    posting.list_fingerprint,
                 ),
             )
+
+    def apply_crawl_list_presence(
+        self,
+        job_posting_id: str,
+        list_fingerprint: str,
+        *,
+        full_refresh: bool,
+    ) -> Literal["unchanged", "needs_detail"]:
+        """Decide whether Crawl needs a detail fetch for this list row.
+
+        ``unchanged``: fingerprint matches and not full refresh — ensure Open.
+        ``needs_detail``: Assistant should fetch detail and call ``commit_crawl_detail``.
+        """
+        existing = self.get_job_posting(job_posting_id)
+        if (
+            not full_refresh
+            and existing is not None
+            and existing.list_fingerprint == list_fingerprint
+        ):
+            if existing.listing_status != "Open":
+                self.set_listing_status(job_posting_id, "Open")
+            return "unchanged"
+        return "needs_detail"
+
+    def commit_crawl_detail(self, posting: JobPosting) -> None:
+        """Upsert crawled detail and clear Match Assessment (Pending)."""
+        self.upsert_job_posting(posting)
+        self.clear_match_assessment(posting.id)
 
     def set_listing_status(self, job_posting_id: str, listing_status: str) -> None:
         """Update Listing status for one Job Posting."""
