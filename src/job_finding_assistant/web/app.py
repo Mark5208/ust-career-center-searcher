@@ -12,14 +12,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from job_finding_assistant.assistant import (
-    AssessmentSummary,
     AssessmentSummaryCatalog,
     Assistant,
     CandidateFilesView,
     CrawlFilters,
     CrawlOutcome,
     DeleteNeedsConfirm,
-    PreparationPacketView,
+    MatchAssessmentPage,
+    PreparationPacketPage,
     PrepareBlockedError,
     PrepareFailedError,
     PrepareNeedsConfirm,
@@ -28,7 +28,6 @@ from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
 from job_finding_assistant.llm_runtime import build_llm_ports, load_llm_runtime_config
 from job_finding_assistant.master_cv_store import DiskMasterCvStore
-from job_finding_assistant.match_assessment import MatchAssessment
 from job_finding_assistant.preparation_packet import PreparationPacket
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -43,19 +42,15 @@ class SupportsAssistantUi(Protocol):
     ) -> AssessmentSummaryCatalog:
         """Load Assessment Summary catalog (rejudge + rows + progress) for GET /."""
 
-    def list_assessment_summaries(
-        self,
-        *,
-        include_closed: bool = False,
-        include_passed_deadlines: bool = False,
-    ) -> list[AssessmentSummary]:
-        """Return Assessment Summaries (detail/packet helpers; no rejudge)."""
+    def load_match_assessment_page(
+        self, job_posting_id: str
+    ) -> MatchAssessmentPage | None:
+        """Load Match Assessment detail page, or None when unknown."""
 
-    def can_prepare(self, job_posting_id: str) -> bool:
-        """Return whether Prepare is available for the Job Posting."""
-
-    def get_match_assessment(self, job_posting_id: str) -> MatchAssessment | None:
-        """Return Match Assessment detail, or None when Pending."""
+    def load_preparation_packet_page(
+        self, job_posting_id: str
+    ) -> PreparationPacketPage | None:
+        """Load Preparation Packet page, or None when no packet."""
 
     def prepare(
         self,
@@ -65,9 +60,6 @@ class SupportsAssistantUi(Protocol):
         confirm_overwrite: bool = False,
     ) -> PreparationPacket:
         """Build or overwrite the Preparation Packet."""
-
-    def get_preparation_packet(self, job_posting_id: str) -> PreparationPacketView | None:
-        """Return packet view with current Match Assessment."""
 
     def get_tailored_yaml(self, job_posting_id: str) -> str | None:
         """Return Tailored YAML for download."""
@@ -95,9 +87,6 @@ class SupportsAssistantUi(Protocol):
 
     def clear_preferences_path(self) -> None:
         """Clear the Preferences path."""
-
-    def get_llm_unavailable_reason(self) -> str | None:
-        """Short non-secret LLM Unavailable reason, if any."""
 
     def get_crawl_filters(self) -> CrawlFilters:
         """Return Crawl Filters."""
@@ -165,23 +154,17 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
         request: Request, job_posting_id: str
     ) -> Response:
         current = request.app.state.assistant
-        summary: AssessmentSummary | None = None
-        for row in current.list_assessment_summaries(
-            include_closed=True, include_passed_deadlines=True
-        ):
-            if row.job_posting_id == job_posting_id:
-                summary = row
-                break
-        if summary is None:
+        page = current.load_match_assessment_page(job_posting_id)
+        if page is None:
             return RedirectResponse(url="/", status_code=303)
         return _TEMPLATES.TemplateResponse(
             request,
             "match_assessment_detail.html",
             {
-                "summary": summary,
-                "match_assessment": current.get_match_assessment(job_posting_id),
-                "can_prepare": current.can_prepare(job_posting_id),
-                "llm_unavailable_reason": current.get_llm_unavailable_reason(),
+                "summary": page.summary,
+                "match_assessment": page.match_assessment,
+                "can_prepare": page.can_prepare,
+                "llm_unavailable_reason": page.llm_unavailable_reason,
             },
         )
 
@@ -250,27 +233,18 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
     @app.get("/jobs/{job_posting_id}/packet", response_class=HTMLResponse)
     def packet_page(request: Request, job_posting_id: str) -> Response:
         current = request.app.state.assistant
-        view = current.get_preparation_packet(job_posting_id)
-        if view is None:
+        page = current.load_preparation_packet_page(job_posting_id)
+        if page is None:
             return RedirectResponse(url="/", status_code=303)
-        posting_title = job_posting_id
-        posting_employer = ""
-        for summary in current.list_assessment_summaries(
-            include_closed=True, include_passed_deadlines=True
-        ):
-            if summary.job_posting_id == job_posting_id:
-                posting_title = summary.title
-                posting_employer = summary.employer
-                break
         return _TEMPLATES.TemplateResponse(
             request,
             "preparation_packet.html",
             {
                 "job_posting_id": job_posting_id,
-                "title": posting_title,
-                "employer": posting_employer,
-                "packet": view.packet,
-                "match_assessment": view.match_assessment,
+                "title": page.title,
+                "employer": page.employer,
+                "packet": page.packet,
+                "match_assessment": page.match_assessment,
             },
         )
 

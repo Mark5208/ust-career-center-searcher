@@ -86,7 +86,7 @@ Implemented as a first-class packet peer from the same tailor pass (Fake scripts
 
 ### Prepare flow (ADR-0013)
 
-Implemented through `Assistant.prepare` / `get_preparation_packet` / downloads:
+Implemented through `Assistant.prepare` / `load_preparation_packet_page` (UI) / `get_preparation_packet` (domain helpers) / downloads:
 
 - Prepare blocked only while Pending; Closed / Deadline Passed allowed; Override removed.
 - HC fail → confirm with reason; re-Prepare → overwrite confirm; otherwise one-click.

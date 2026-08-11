@@ -13,6 +13,8 @@ from job_finding_assistant.assistant import (
     CrawlFilters,
     CrawlOutcome,
     DeleteNeedsConfirm,
+    MatchAssessmentPage,
+    PreparationPacketPage,
     PreparationPacketView,
 )
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
@@ -40,12 +42,11 @@ class _RecordingAssistant:
     """Stand-in that proves the route calls Assistant, not CatalogStore directly."""
 
     def __init__(self) -> None:
-        self.list_calls = 0
-        self.list_kwargs: dict[str, bool] = {}
         self.catalog_load_calls = 0
         self.catalog_load_kwargs: dict[str, bool] = {}
         self.summaries: list[AssessmentSummary] = []
-        self.can_prepare_calls: list[str] = []
+        self.match_assessment_page_calls: list[str] = []
+        self.preparation_packet_page_calls: list[str] = []
         self.rejudge_calls = 0
         self.processed_this_load = 0
         self.pending_remaining = 0
@@ -65,7 +66,6 @@ class _RecordingAssistant:
         self.crawl_calls: list[bool] = []
         self._can_start_crawl = False
         self.prepare_calls: list[str] = []
-        self.get_packet_calls: list[str] = []
         self.packet_views: dict[str, PreparationPacketView] = {}
         self.delete_calls: list[tuple[str, bool]] = []
         self.delete_needs_confirm = False
@@ -74,7 +74,6 @@ class _RecordingAssistant:
             "Match Assessment, and Preparation Packet. No undo."
         )
         self.match_assessments: dict[str, MatchAssessment] = {}
-        self.get_match_assessment_calls: list[str] = []
 
     def load_assessment_summary_catalog(
         self,
@@ -104,30 +103,41 @@ class _RecordingAssistant:
             llm_unavailable_reason=self.llm_unavailable_reason,
         )
 
-    def list_assessment_summaries(
-        self,
-        *,
-        include_closed: bool = False,
-        include_passed_deadlines: bool = False,
-    ) -> list[AssessmentSummary]:
-        self.list_calls += 1
-        self.list_kwargs = {
-            "include_closed": include_closed,
-            "include_passed_deadlines": include_passed_deadlines,
-        }
-        return list(self.summaries)
-
-    def can_prepare(self, job_posting_id: str) -> bool:
-        self.can_prepare_calls.append(job_posting_id)
-        for row in self.summaries:
-            if row.job_posting_id != job_posting_id:
+    def load_match_assessment_page(
+        self, job_posting_id: str
+    ) -> MatchAssessmentPage | None:
+        self.match_assessment_page_calls.append(job_posting_id)
+        for summary in self.summaries:
+            if summary.job_posting_id != job_posting_id:
                 continue
-            return not row.pending
-        return False
+            return MatchAssessmentPage(
+                summary=summary,
+                match_assessment=self.match_assessments.get(job_posting_id),
+                can_prepare=not summary.pending,
+                llm_unavailable_reason=self.llm_unavailable_reason,
+            )
+        return None
 
-    def get_match_assessment(self, job_posting_id: str) -> MatchAssessment | None:
-        self.get_match_assessment_calls.append(job_posting_id)
-        return self.match_assessments.get(job_posting_id)
+    def load_preparation_packet_page(
+        self, job_posting_id: str
+    ) -> PreparationPacketPage | None:
+        self.preparation_packet_page_calls.append(job_posting_id)
+        view = self.packet_views.get(job_posting_id)
+        if view is None:
+            return None
+        title = job_posting_id
+        employer = ""
+        for summary in self.summaries:
+            if summary.job_posting_id == job_posting_id:
+                title = summary.title
+                employer = summary.employer
+                break
+        return PreparationPacketPage(
+            title=title,
+            employer=employer,
+            packet=view.packet,
+            match_assessment=view.match_assessment,
+        )
 
     def prepare(
         self,
@@ -145,10 +155,6 @@ class _RecordingAssistant:
             tailored_yaml="cv:\n  name: Tailored\n",
             pdf_bytes=b"%PDF",
         )
-
-    def get_preparation_packet(self, job_posting_id: str) -> PreparationPacketView | None:
-        self.get_packet_calls.append(job_posting_id)
-        return self.packet_views.get(job_posting_id)
 
     def get_tailored_yaml(self, job_posting_id: str) -> str | None:
         view = self.packet_views.get(job_posting_id)
@@ -198,9 +204,6 @@ class _RecordingAssistant:
         self.clear_preferences_calls += 1
         self.preferences_path = None
 
-    def get_llm_unavailable_reason(self) -> str | None:
-        return self.llm_unavailable_reason
-
     def get_crawl_filters(self) -> CrawlFilters:
         return self.crawl_filters
 
@@ -227,8 +230,8 @@ def test_catalog_page_calls_assistant_and_shows_empty_job_postings_state() -> No
 
     assert response.status_code == 200
     assert assistant.catalog_load_calls == 1
-    assert assistant.list_calls == 0
-    assert assistant.can_prepare_calls == []
+    assert assistant.match_assessment_page_calls == []
+    assert assistant.preparation_packet_page_calls == []
     assert assistant.catalog_load_kwargs == {
         "include_closed": False,
         "include_passed_deadlines": False,
@@ -284,7 +287,7 @@ def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pendi
     assert "pass" in response.text
     assert "Preference" in response.text
     assert assistant.catalog_load_calls == 1
-    assert assistant.can_prepare_calls == []
+    assert assistant.match_assessment_page_calls == []
 
 
 def test_catalog_page_shows_rejudge_progress_banner() -> None:
@@ -710,7 +713,7 @@ def test_match_assessment_detail_page_uses_assistant_and_shows_signals() -> None
     response = client.get("/jobs/86534")
 
     assert response.status_code == 200
-    assert assistant.get_match_assessment_calls == ["86534"]
+    assert assistant.match_assessment_page_calls == ["86534"]
     assert assistant.catalog_load_calls == 0
     assert "Match Assessment" in response.text
     assert "System Engineer" in response.text
@@ -839,7 +842,7 @@ def test_assessment_summary_stays_bands_only_without_evidence_lists() -> None:
     assert "Candidate Snapshot" not in response.text
     assert "Work Location: Singapore" not in response.text
     assert "Python platform work" not in response.text
-    assert assistant.get_match_assessment_calls == []
+    assert assistant.match_assessment_page_calls == []
 
 
 def test_preparation_packet_keeps_compact_assessment_strip_with_link() -> None:
@@ -888,6 +891,7 @@ def test_preparation_packet_keeps_compact_assessment_strip_with_link() -> None:
     response = client.get("/jobs/86534/packet")
 
     assert response.status_code == 200
+    assert assistant.preparation_packet_page_calls == ["86534"]
     assert "Current Match Assessment" in response.text
     assert "Hard Constraint: fail" in response.text
     assert "Requires relocation outside Hong Kong" in response.text
@@ -920,7 +924,7 @@ def test_match_assessment_detail_pending_blocks_prepare_and_shows_clear_state() 
     response = client.get("/jobs/86534")
 
     assert response.status_code == 200
-    assert assistant.get_match_assessment_calls == ["86534"]
+    assert assistant.match_assessment_page_calls == ["86534"]
     assert assistant.catalog_load_calls == 0
     assert "Pending" in response.text
     assert "Prepare unavailable" in response.text

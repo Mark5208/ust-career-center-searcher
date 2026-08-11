@@ -843,7 +843,7 @@ def test_default_sort_preference_then_relevance_deadline_unknown_last(
             id="weak-pref-strong-rel",
             title="weak-pref-strong-rel",
             employer="Acme",
-            application_deadline="2026-08-10",
+            application_deadline="2026-08-25",
         ),
         JobListEntry(
             id="strong-pref-later",
@@ -954,3 +954,72 @@ def test_default_sort_preference_then_relevance_deadline_unknown_last(
         "fail-strong",
         "pending",
     ]
+
+
+def test_load_match_assessment_page_joins_summary_detail_without_catalog_rejudge(
+    tmp_path: Path,
+) -> None:
+    cv_path = _write_cv(tmp_path)
+    entry, detail = _open_posting()
+    job_board = FakeJobBoardSession(
+        authenticated=True, list_entries=[entry], details={detail.id: detail}
+    )
+    assistant = _assistant(
+        tmp_path,
+        job_board=job_board,
+        master_cv=FakeMasterCvStore(path=str(cv_path)),
+        llm_judge=FakeLlmJudge(relevance="Strong"),
+    )
+    assert assistant.run_crawl().stored_count == 1
+    assert assistant.rejudge_pending_assessments() == 1
+
+    page = assistant.load_match_assessment_page("86534")
+
+    assert page is not None
+    assert page.summary.job_posting_id == "86534"
+    assert page.summary.title == "System Engineer"
+    assert page.match_assessment is not None
+    assert page.match_assessment.relevance == "Strong"
+    assert page.can_prepare is True
+    assert page.llm_unavailable_reason is None
+
+
+def test_load_match_assessment_page_unknown_id_returns_none(tmp_path: Path) -> None:
+    assistant = _assistant(tmp_path)
+
+    assert assistant.load_match_assessment_page("missing") is None
+
+
+def test_load_preparation_packet_page_includes_title_employer(
+    tmp_path: Path,
+) -> None:
+    cv_path = _write_cv(tmp_path)
+    entry, detail = _open_posting()
+    job_board = FakeJobBoardSession(
+        authenticated=True, list_entries=[entry], details={detail.id: detail}
+    )
+    assistant = _assistant(
+        tmp_path,
+        job_board=job_board,
+        master_cv=FakeMasterCvStore(path=str(cv_path)),
+        llm_judge=FakeLlmJudge(relevance="Strong"),
+    )
+    assert assistant.run_crawl().stored_count == 1
+    assert assistant.rejudge_pending_assessments() == 1
+    assistant.prepare("86534")
+
+    page = assistant.load_preparation_packet_page("86534")
+
+    assert page is not None
+    assert page.title == "System Engineer"
+    assert page.employer == "Example Corp"
+    assert page.packet.job_posting_id == "86534"
+    assert page.match_assessment is not None
+
+
+def test_load_preparation_packet_page_without_packet_returns_none(
+    tmp_path: Path,
+) -> None:
+    assistant = _assistant(tmp_path)
+
+    assert assistant.load_preparation_packet_page("86534") is None
