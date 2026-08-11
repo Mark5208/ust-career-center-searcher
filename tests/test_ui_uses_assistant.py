@@ -833,6 +833,23 @@ def test_match_assessment_detail_page_uses_assistant_and_shows_signals() -> None
     assert 'action="/jobs/86534/delete"' in response.text
     assert "Override" not in response.text
     assert "accordion" not in response.text.lower()
+    assert "Signal Summary" in response.text
+    assert 'href="#signal-hard-constraint"' in response.text
+    assert 'href="#signal-preference"' in response.text
+    assert 'href="#signal-relevance"' in response.text
+    assert 'id="signal-hard-constraint"' in response.text
+    assert 'id="signal-preference"' in response.text
+    assert 'id="signal-relevance"' in response.text
+    assert response.text.index("Signal Summary") < response.text.index(
+        'id="signal-hard-constraint"'
+    )
+    assert response.text.index('id="signal-relevance"') < response.text.index(
+        'action="/jobs/86534/prepare"'
+    )
+    assert '<details class="signal-section" id="signal-hard-constraint" open>' in response.text
+    assert '<details class="signal-section" id="signal-preference" open>' in response.text
+    assert '<details class="signal-section" id="signal-relevance" open>' in response.text
+    assert response.text.count("<details ") == 3
 
 
 def test_match_assessment_detail_shows_empty_evidence_states() -> None:
@@ -926,6 +943,8 @@ def test_assessment_summary_stays_bands_only_without_evidence_lists() -> None:
     assert "Hard Constraint Evidence" not in response.text
     assert "Preference Evidence" not in response.text
     assert "Relevance Evidence" not in response.text
+    assert "Signal Summary" not in response.text
+    assert "Signal Section" not in response.text
     assert "Hard Constraints file" not in response.text
     assert "Preferences file" not in response.text
     assert "Candidate Snapshot" not in response.text
@@ -991,6 +1010,8 @@ def test_preparation_packet_keeps_compact_assessment_strip_with_link() -> None:
     assert "Hard Constraint Evidence" not in response.text
     assert "Preference Evidence" not in response.text
     assert "Relevance Evidence" not in response.text
+    assert "Signal Summary" not in response.text
+    assert 'id="signal-hard-constraint"' not in response.text
     assert "Work Location: Singapore" not in response.text
     assert "Python platform work" not in response.text
 
@@ -1020,6 +1041,13 @@ def test_match_assessment_detail_pending_blocks_prepare_and_shows_clear_state() 
     assert "LLM Unavailable: API key not configured" in response.text
     assert 'action="/jobs/86534/prepare"' not in response.text
     assert 'action="/jobs/86534/delete"' in response.text
+    assert "Signal Summary" not in response.text
+    assert 'id="signal-hard-constraint"' not in response.text
+    assert 'id="signal-preference"' not in response.text
+    assert 'id="signal-relevance"' not in response.text
+    assert "<details" not in response.text
+    assert "Hard Constraint Evidence" not in response.text
+    assert "No Hard Constraint Evidence pairs." not in response.text
 
 
 def test_match_assessment_detail_missing_posting_redirects_home() -> None:
