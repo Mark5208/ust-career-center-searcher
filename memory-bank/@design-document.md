@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0017`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with Relevance Evidence + Hard Constraint / Preference Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests). Match Assessment **Signal Summary + Signal Sections** decided (grill → GitHub #21); **not implemented in UI yet**. Catalog **Bulk Prepare / Bulk Delete** and **LLM Run** activity UX decided (#22 / #23); **not implemented in UI yet**.
+**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with **Signal Summary** + collapsible **Signal Sections** for Hard Constraint / Preference / Relevance Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests). Catalog **Bulk Prepare / Bulk Delete** and **LLM Run** activity UX decided (#22 / #23); **not implemented in UI yet**.
 
 ## Primary seam
 
@@ -50,7 +50,7 @@ Implemented through `Assistant` / `MatchAssessment` / `CatalogStore` (persisted 
 
 - Hard Constraint Evidence and Preference Evidence lists on Match Assessment detail with signal-specific counterpart labels; empty lists allowed (no padding from short reasons).
 - Assessment Summary stays bands-only; Preparation Packet keeps a compact strip (bands + short reasons) with a link to Match Assessment for full lists.
-- Pre-upgrade complete rows load empty HC/Preference Evidence until a natural rejudge. Parent: GitHub #19 (closed). Nav/Signal Sections: GitHub #21.
+- Pre-upgrade complete rows load empty HC/Preference Evidence until a natural rejudge. Parent: GitHub #19 (closed). Nav/Signal Sections: GitHub #21 (shipped).
 
 ### LLM runtime (ADR-0015)
 

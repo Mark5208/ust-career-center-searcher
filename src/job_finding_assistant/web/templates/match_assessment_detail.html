@@ -44,18 +44,50 @@
         font-size: 0.95rem;
         margin: 0 0 0.5rem;
       }
-      .signal {
-        margin: 0 0 1rem;
-        padding-bottom: 0.75rem;
+      .signal-summary {
+        margin: 1.25rem 0 1.5rem;
+        padding: 0.85rem 0;
+        border-top: 1px solid var(--line);
         border-bottom: 1px solid var(--line);
       }
-      .signal strong {
+      .signal-summary h2 {
+        font-size: 1rem;
+        margin: 0 0 0.65rem;
+      }
+      .signal-summary ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .signal-summary li {
+        margin: 0 0 0.55rem;
+      }
+      .signal-summary a {
         color: var(--ink);
+        text-decoration: none;
+        border-bottom: 1px solid var(--line);
+      }
+      .signal-section {
+        margin: 0 0 1rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.75rem;
+      }
+      .signal-section summary {
+        cursor: pointer;
+        color: var(--ink);
+        font-weight: 600;
+        line-height: 1.45;
+      }
+      .signal-section summary .reason {
+        display: block;
+        font-weight: 400;
+        color: var(--muted);
+        margin-top: 0.25rem;
       }
       .evidence {
         list-style: none;
         padding: 0;
-        margin: 0;
+        margin: 0.75rem 0 0;
       }
       .evidence li {
         margin: 0 0 1rem;
@@ -93,66 +125,98 @@
       {% endif %}
 
       {% if match_assessment %}
-      <div class="signal">
-        <p>
-          <strong>Hard Constraint:</strong> {{ match_assessment.hard_constraint_outcome }}
-        </p>
-        <p>{{ match_assessment.hard_constraint_reason }}</p>
-      </div>
-      <h2>Hard Constraint Evidence</h2>
-      {% if match_assessment.hard_constraint_evidence %}
-      <ul class="evidence">
-        {% for pair in match_assessment.hard_constraint_evidence %}
-        <li>
-          <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
-          <p><strong>Hard Constraints file:</strong> {{ pair.candidate_excerpt }}</p>
-          <p>{{ pair.role }}</p>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p>No Hard Constraint Evidence pairs.</p>
-      {% endif %}
+      <section class="signal-summary" aria-label="Signal Summary">
+        <h2>Signal Summary</h2>
+        <ul>
+          <li>
+            <a href="#signal-hard-constraint">
+              Hard Constraint: {{ match_assessment.hard_constraint_outcome }}
+            </a>
+            {% if match_assessment.hard_constraint_reason %}
+            — {{ match_assessment.hard_constraint_reason }}
+            {% endif %}
+          </li>
+          <li>
+            <a href="#signal-preference">
+              Preference: {{ match_assessment.preference or "unknown" }}
+            </a>
+            {% if match_assessment.preference_reason %}
+            — {{ match_assessment.preference_reason }}
+            {% endif %}
+          </li>
+          <li>
+            <a href="#signal-relevance">
+              Relevance: {{ match_assessment.relevance }}
+            </a>
+          </li>
+        </ul>
+      </section>
 
-      <div class="signal">
-        <p>
-          <strong>Preference:</strong>
-          {{ match_assessment.preference or "unknown" }}
-        </p>
-        <p>{{ match_assessment.preference_reason }}</p>
-      </div>
-      <h2>Preference Evidence</h2>
-      {% if match_assessment.preference_evidence %}
-      <ul class="evidence">
-        {% for pair in match_assessment.preference_evidence %}
-        <li>
-          <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
-          <p><strong>Preferences file:</strong> {{ pair.candidate_excerpt }}</p>
-          <p>{{ pair.role }}</p>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p>No Preference Evidence pairs.</p>
-      {% endif %}
+      <details class="signal-section" id="signal-hard-constraint" open>
+        <summary>
+          Hard Constraint: {{ match_assessment.hard_constraint_outcome }}
+          {% if match_assessment.hard_constraint_reason %}
+          <span class="reason">{{ match_assessment.hard_constraint_reason }}</span>
+          {% endif %}
+        </summary>
+        <h2>Hard Constraint Evidence</h2>
+        {% if match_assessment.hard_constraint_evidence %}
+        <ul class="evidence">
+          {% for pair in match_assessment.hard_constraint_evidence %}
+          <li>
+            <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
+            <p><strong>Hard Constraints file:</strong> {{ pair.candidate_excerpt }}</p>
+            <p>{{ pair.role }}</p>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p>No Hard Constraint Evidence pairs.</p>
+        {% endif %}
+      </details>
 
-      <div class="signal">
-        <p><strong>Relevance:</strong> {{ match_assessment.relevance }}</p>
-      </div>
-      <h2>Relevance Evidence</h2>
-      {% if match_assessment.evidence %}
-      <ul class="evidence">
-        {% for pair in match_assessment.evidence %}
-        <li>
-          <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
-          <p><strong>Candidate Snapshot:</strong> {{ pair.candidate_excerpt }}</p>
-          <p>{{ pair.role }}</p>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p>No Relevance Evidence pairs.</p>
-      {% endif %}
+      <details class="signal-section" id="signal-preference" open>
+        <summary>
+          Preference: {{ match_assessment.preference or "unknown" }}
+          {% if match_assessment.preference_reason %}
+          <span class="reason">{{ match_assessment.preference_reason }}</span>
+          {% endif %}
+        </summary>
+        <h2>Preference Evidence</h2>
+        {% if match_assessment.preference_evidence %}
+        <ul class="evidence">
+          {% for pair in match_assessment.preference_evidence %}
+          <li>
+            <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
+            <p><strong>Preferences file:</strong> {{ pair.candidate_excerpt }}</p>
+            <p>{{ pair.role }}</p>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p>No Preference Evidence pairs.</p>
+        {% endif %}
+      </details>
+
+      <details class="signal-section" id="signal-relevance" open>
+        <summary>
+          Relevance: {{ match_assessment.relevance }}
+        </summary>
+        <h2>Relevance Evidence</h2>
+        {% if match_assessment.evidence %}
+        <ul class="evidence">
+          {% for pair in match_assessment.evidence %}
+          <li>
+            <p><strong>Job Posting:</strong> {{ pair.job_excerpt }}</p>
+            <p><strong>Candidate Snapshot:</strong> {{ pair.candidate_excerpt }}</p>
+            <p>{{ pair.role }}</p>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p>No Relevance Evidence pairs.</p>
+        {% endif %}
+      </details>
       {% else %}
       <p class="meta">
         Pending — Match Assessment is not ready yet. Prepare stays unavailable until

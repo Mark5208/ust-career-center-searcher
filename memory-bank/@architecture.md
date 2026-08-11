@@ -113,7 +113,7 @@ Assessment Summary projection: typed `AssessmentSummaryRow` from catalog + `Pack
 ## Candidate / Crawl / Assessment / Prepare UI
 
 - `/` — Assessment Summary list via `Assistant.load_assessment_summary_catalog` (default Open + Upcoming/Unknown; Closed/Passed toggles; links to Match Assessment detail; Prepare / Re-Prepare; Delete; packet presence/Stale; one refresh + at most five Pending rejudge attempts per load with early-stop on LLM Unavailable; progress banner for `processed_this_load` / `pending_remaining`; short non-secret LLM Unavailable reason when judge/tailor cannot run)
-- `/jobs/{id}` — Match Assessment detail via `Assistant.load_match_assessment_page` (summary + Match Assessment + can_prepare + LLM Unavailable; no opportunistic rejudge; HC + reason + Hard Constraint Evidence, Preference + reason + Preference Evidence, Relevance + Relevance Evidence; signal-specific counterpart labels; Prepare / Delete; Pending / LLM Unavailable clear; no accordion / Override)
+- `/jobs/{id}` — Match Assessment detail via `Assistant.load_match_assessment_page` (summary + Match Assessment + can_prepare + LLM Unavailable; no opportunistic rejudge; non-sticky **Signal Summary** with in-page anchors; independently collapsible **Signal Sections** (`details`/`summary`, all open on first load) for HC + reason + Hard Constraint Evidence, Preference + reason + Preference Evidence, Relevance + Relevance Evidence; signal-specific counterpart labels; Prepare / Delete after sections; Pending / LLM Unavailable clear without empty Signal Sections; no exclusive accordion / Override)
 - `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
 - `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)
 - `/jobs/{id}/packet` — Preparation Packet via `Assistant.load_preparation_packet_page` (title/employer + Gap Report → Edit Summary → Tailored downloads + compact current Match Assessment; no opportunistic rejudge; link to detail for full Evidence lists)
@@ -139,4 +139,4 @@ Live Crawls intentionally wait randomly between Job Board list pages and detail 
 ## Notes
 
 - Production PDF uses `RenderCvPdfRenderer` (RenderCV CLI); local shell falls back to missing-PDF signal when the CLI is unavailable. Tests use `FakePdfRenderer`.
-- Accordion / richer Match Assessment navigation chrome remains out of v1; Hard Constraint / Preference Evidence lists are stored and shown on Match Assessment detail (ADR-0016), not on Assessment Summary or duplicated into the packet path.
+- Hard Constraint / Preference Evidence lists are stored and shown on Match Assessment detail (ADR-0016) with Signal Summary + independently collapsible Signal Sections (#21), not on Assessment Summary or duplicated into the packet path. Exclusive one-open accordion chrome remains out of v1.
