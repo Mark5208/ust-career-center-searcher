@@ -43,14 +43,18 @@ An optional Crawl Filter cutoff date; after list discovery, the Crawl skips deta
 _Avoid_: filter, max age, crawl window
 
 **Delete**:
-The user permanently removes a Job Posting, its Match Assessment, and its Preparation Packet (if any) from the local catalog and tool-managed store, after a confirm that names those artifacts. No trash or undo. Rules: ADR-0013.
+The user permanently removes a Job Posting, its Match Assessment, and its Preparation Packet (if any) from the local catalog and tool-managed store, after a confirm that names those artifacts. No trash or undo. Catalog may use Bulk Delete for a selection. Rules: ADR-0013.
 _Avoid_: archive, hide, soft-delete
 
 ### Candidate
 
 **Master CV**:
-The user's sole authored experience-and-skills document as RenderCV YAML on disk; never overwritten by the tool. Typography and PDF output are delegated to RenderCV; the user focuses on content. Unreadable or invalid YAML yields no usable Candidate Snapshot (Relevance stays Pending) with a clear error — rules: ADR-0014.
-_Avoid_: resume, profile, base CV, LaTeX Master CV
+The user-owned full experience dossier as RenderCV YAML on disk — may be longer than an apply-sized CV. Typography and PDF output are delegated to RenderCV; the user focuses on content. The tool may write this file only on explicit Master CV Enrichment confirm; Prepare and the tailor never overwrite it. Unreadable or invalid YAML yields no usable Candidate Snapshot (Relevance stays Pending) with a clear error — rules: ADR-0014. Enrichment: ADR-0017.
+_Avoid_: resume, profile, base CV, LaTeX Master CV, shadow dossier
+
+**Master CV Enrichment**:
+A user-started, job-agnostic flow: freeform experience description → user-confirmed placement (LLM suggests existing or new entry under an existing section) → fixed-dimension step interview → editable full highlights list → confirm write of ordinary entry content into the Master CV. One session writes one entry. Not part of Prepare or Crawl. Rules: ADR-0017.
+_Avoid_: Tailored CV control, CV chat, auto-expand, experience mining, JD-steered interview, entry-list-only enrich
 
 **Hard Constraints file**:
 A user-authored plain-text file of non-negotiable terms (path set like the Master CV; tool reads only). Empty or missing means no Hard Constraints to check. Path set but unreadable yields unknown for that signal plus a path/read error (not Pending) — rules: ADR-0014.
@@ -61,7 +65,7 @@ A user-authored plain-text file of soft priorities — what the user likes to ha
 _Avoid_: settings, user config, hard constraints file, relevance input (alone)
 
 **Candidate Snapshot**:
-A structured view derived from the Master CV for matching: contact if present, education, experience, projects, and skills/tools as written — no inferred skills, and no Hard Constraints or Preferences. Rebuilt when the Master CV changes; inspectable; not hand-edited (fix the Master CV instead). Absent when the Master CV is unreadable or invalid.
+A structured view derived from the Master CV for matching: contact if present, education, experience, projects, and skills/tools as written — no inferred skills, and no Hard Constraints or Preferences. Rebuilt when the Master CV changes; inspectable; not hand-edited (fix the Master CV or run Master CV Enrichment instead). Absent when the Master CV is unreadable or invalid.
 _Avoid_: profile, parsed CV (as a product concept), editable profile
 
 ### Assessment
@@ -79,8 +83,16 @@ An ordinal capability-fit band — Strong, Mixed, or Weak — for how well the M
 _Avoid_: match score, percentage, ranking score, ATS score, Preference
 
 **Assessment Summary**:
-The browse/list view of fit for one Job Posting: title, employer, Listing status, Deadline status, Hard Constraint outcome, Preference band, Relevance band, and whether a Preparation Packet exists (and if Stale). Default catalog shows Open postings with Deadline Upcoming or Unknown; sorts Pending last, then Hard Constraint fail after pass and unknown, then Preference (Strong, then Mixed, then Weak; unknown Preference ties), then Relevance (Strong, then Mixed, then Weak), then sooner deadline (known Upcoming sooner-first; Deadline Unknown last among otherwise-tied rows); Closed and Deadline Passed are hidden by default but toggleable.
+The browse/list view of fit for one Job Posting: title, employer, Listing status, Deadline status, Hard Constraint outcome, Preference band, Relevance band, and whether a Preparation Packet exists (and if Stale). Default catalog shows Open postings with Deadline Upcoming or Unknown; sorts Pending last, then Hard Constraint fail after pass and unknown, then Preference (Strong, then Mixed, then Weak; unknown Preference ties), then Relevance (Strong, then Mixed, then Weak), then sooner deadline (known Upcoming sooner-first; Deadline Unknown last among otherwise-tied rows); Closed and Deadline Passed are hidden by default but toggleable. Catalog actions are row checkboxes, select-all (visible rows), Bulk Prepare, Bulk Delete, and explicit start of a catalog assess LLM Run — not per-row Prepare/Delete; catalog load does not itself run a judge batch. Rules: ADR-0013, ADR-0015.
 _Avoid_: job card, list row, dashboard row
+
+**Bulk Prepare**:
+Prepare run for every selected Assessment Summary row that can Prepare; skips Pending and other not-ready rows with counts. One combined confirm covers Hard Constraint fail reasons and packet overwrite warnings for the eligible set (or runs immediately if none need confirm). Runs as an LLM Run on Assessment Summary (sequential; stops remaining on LLM Unavailable; continues after other per-posting Prepare failures). No hard batch-size cap. Rules: ADR-0013, ADR-0015.
+_Avoid_: batch assess, mass rejudge, confirm-before-batch-rejudge
+
+**Bulk Delete**:
+Hard-delete of every selected Assessment Summary row after one confirm that lists each posting and whether a Match Assessment / Preparation Packet exists. Sequential; no trash or undo. Rules: ADR-0013.
+_Avoid_: archive, soft-delete, bulk export
 
 **Pending**:
 Assessment Summary state when a required judgment is missing: Hard Constraint when the Hard Constraints file is non-empty and readable, Preference when the Preferences file is non-empty and readable, or Relevance (needs a usable Master CV / Candidate Snapshot and judge). Also Pending when the judge fails or is unavailable for a required signal (LLM Unavailable), or when the Master CV is unreadable or invalid. Empty Hard Constraints or Preferences files count as resolved unknown, not Pending; a set but unreadable Hard Constraints or Preferences path is unknown for that signal (with a path/read error), not Pending. Prepare is unavailable while Pending; Pending rows sort after assessed ones. Freshness rules: ADR-0014.
@@ -90,9 +102,21 @@ _Avoid_: loading, unassessed, not ready (alone)
 The live judge or tailor cannot run — missing credentials or provider failure. Required judgments stay Pending (or the prior complete Match Assessment is kept); Prepare stays blocked while Pending. The UI shows a short non-secret reason. Runtime rules: ADR-0015.
 _Avoid_: offline mode, fallback scorer, Fake assessment (as a user-facing mode)
 
+**LLM Run**:
+A user-triggered sequential stretch of judge or Prepare calls on Assessment Summary — catalog Pending assess (up to five attempts per start) or Bulk Prepare — with at most one in flight at a time. While running, the catalog shows phase (Judging or Preparing), Job Posting identity, and k of n for this run, plus Stop. Leave/refresh or Stop aborts the rest after the current posting’s call finishes (cooperative); successes already saved stay; no auto-resume. Not background unattended rejudge; Crawl / file-change opportunistic rejudge (one Pending) is not an LLM Run. Rules: ADR-0015.
+_Avoid_: background job, worker, LLM task, cost session, ops console, spend meter
+
 **Match Assessment**:
-The full fit judgment for one Job Posting on a dedicated detail page (not only the Assessment Summary list): Hard Constraint with short reason and Hard Constraint Evidence, Preference with short reason and Preference Evidence, Relevance with Evidence, and actions to Prepare or Delete. Accordion or richer navigation stays out until a later theme. On Master CV, Hard Constraints file, or Preferences file change (content or path clear), all assessments go Pending and re-judge asynchronously; new or detail-changed Crawl postings start Pending then re-judge asynchronously (Crawl success does not mean assessments finished). Judge failure leaves Pending or keeps the prior complete assessment — never a half-assessed final row. Otherwise the last Assessment is kept. Evidence lists: ADR-0016. Freshness: ADR-0014.
-_Avoid_: score, analysis, match result, ATS score, accordion (for this theme)
+The full fit judgment for one Job Posting on a dedicated detail page (not only the Assessment Summary list): a Signal Summary, Signal Sections for Hard Constraint / Preference / Relevance (reason + Evidence as applicable), and actions to Prepare or Delete. On Master CV, Hard Constraints file, or Preferences file change (content or path clear), all assessments go Pending and re-judge asynchronously; new or detail-changed Crawl postings start Pending then re-judge asynchronously (Crawl success does not mean assessments finished). Judge failure leaves Pending or keeps the prior complete assessment — never a half-assessed final row. Otherwise the last Assessment is kept. Evidence lists: ADR-0016. Freshness: ADR-0014.
+_Avoid_: score, analysis, match result, ATS score, accordion (exclusive one-open)
+
+**Signal Summary**:
+A compact, non-sticky strip at the top of the Match Assessment listing the three signal outcomes (and short reasons where present) with in-page anchors to each Signal Section. Not shown on the Assessment Summary catalog.
+_Avoid_: sticky header, dashboard strip, accordion TOC
+
+**Signal Section**:
+An independently collapsible Match Assessment block for one signal — header shows outcome/band and short reason; body holds that signal’s Evidence list. Default expanded on first load; open/closed not persisted. Not exclusive (multiple may be open).
+_Avoid_: accordion panel (when meaning exclusive one-open), tab
 
 **Evidence pair**:
 One justification unit: a Job Posting excerpt, a signal-specific counterpart excerpt (or “not found” / “not stated”), and a one-line role. Counterpart is Master CV / Candidate Snapshot for Relevance, a Hard Constraints file line for Hard Constraint, or a Preferences file line for Preference — never the wrong source for that signal.
@@ -121,7 +145,7 @@ The prepare-to-apply output for one Job Posting, held in a tool-managed store (n
 _Avoid_: application pack, draft bundle, apply kit, packets folder
 
 **Tailored CV**:
-A per-Job-Posting RenderCV YAML copy of the Master CV that may reorder, rephrase, emphasize, or omit real content, and may rewrite an existing summary section only. Never invents employers, dates, titles, or skills; preserves the Master CV’s RenderCV YAML structure. Honors optional Master CV `assistant.pinned_section_order` metadata. Rendered to PDF via RenderCV for the user; the Master CV file is never overwritten. Formatting criteria: ADR-0009.
+A per-Job-Posting apply-sized RenderCV YAML derived from the Master CV that may reorder, rephrase, emphasize, or select/omit real content for length and JD fit, and may rewrite an existing summary section only. Never invents employers, dates, titles, or skills; preserves the Master CV’s RenderCV YAML structure. Honors optional Master CV `assistant.pinned_section_order` metadata. Rendered to PDF via RenderCV for the user; Prepare never overwrites the Master CV. Formatting criteria: ADR-0009.
 _Avoid_: modified CV, generated resume, customized CV (when meaning this artifact), LaTeX tailored CV
 
 **Edit Summary**:

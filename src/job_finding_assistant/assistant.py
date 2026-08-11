@@ -11,6 +11,17 @@ from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore, JobPosting
 from job_finding_assistant.constraint_files import fingerprint_path
 from job_finding_assistant.crawl_filters import CrawlFilters
+from job_finding_assistant.enrichment import (
+    DIMENSION_PROMPTS,
+    ENRICHMENT_DIMENSIONS,
+    EnrichmentConflictError,
+    EnrichmentError,
+    EnrichmentSessionView,
+    PlacementSuggestion,
+    atomic_write_text,
+    existing_highlights,
+    patch_master_cv_entry,
+)
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
 from job_finding_assistant.llm_runtime import LlmUnavailableError
 from job_finding_assistant.match_assessment import MatchAssessment
@@ -19,6 +30,7 @@ from job_finding_assistant.pdf_renderer import PdfRenderError, RenderCvPdfRender
 from job_finding_assistant.ports import (
     ConstraintFilesStore,
     JobBoardSession,
+    LlmCvEnricher,
     LlmCvTailor,
     LlmJudge,
     MasterCvStore,
@@ -36,7 +48,11 @@ __all__ = [
     "CrawlFilters",
     "CrawlOutcome",
     "DeleteNeedsConfirm",
+    "EnrichmentConflictError",
+    "EnrichmentError",
+    "EnrichmentSessionView",
     "MatchAssessmentPage",
+    "PlacementSuggestion",
     "PreparationPacketPage",
     "PreparationPacketView",
     "PrepareBlockedError",
@@ -145,6 +161,27 @@ class CandidateFilesView:
     errors: list[str]
 
 
+@dataclass
+class _EnrichmentSession:
+    """Process-local Master CV Enrichment state (ephemeral; not durable)."""
+
+    master_path: str
+    session_fingerprint: str
+    step: str = "freeform"
+    freeform: str = ""
+    placement: PlacementSuggestion | None = None
+    dimension_index: int = 0
+    dimension_answers: dict[str, str] | None = None
+    followup_prompt: str | None = None
+    highlights: list[str] | None = None
+    llm_unavailable_reason: str | None = None
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.dimension_answers is None:
+            self.dimension_answers = {}
+
+
 # Assessment Summary GET / may process this many Pending heads per catalog load.
 _CATALOG_REJUDGE_BUDGET = 5
 
@@ -167,12 +204,14 @@ class Assistant:
         constraint_files: ConstraintFilesStore,
         packet_store_dir: Path | None = None,
         pdf_renderer: PdfRenderer | None = None,
+        llm_cv_enricher: LlmCvEnricher | None = None,
     ) -> None:
         self._catalog_store = catalog_store
         self._job_board = job_board
         self._master_cv = master_cv
         self._llm_judge = llm_judge
         self._llm_cv_tailor = llm_cv_tailor
+        self._llm_cv_enricher = llm_cv_enricher
         self._constraint_files = constraint_files
         self._candidate_file_errors: list[str] = []
         self._llm_call_error: str | None = None
@@ -182,6 +221,7 @@ class Assistant:
         store_root = packet_store_dir or catalog_store.db_path.parent / "packets"
         self._packet_store = PacketStore(store_root)
         self._pdf_renderer: PdfRenderer = pdf_renderer or RenderCvPdfRenderer()
+        self._enrichment: _EnrichmentSession | None = None
 
     def list_assessment_summaries(
         self,
@@ -451,12 +491,298 @@ class Assistant:
         self._constraint_files.clear_preferences_path()
         self._refresh_candidate_file_state()
 
+    def get_enrichment_session(self) -> EnrichmentSessionView | None:
+        """Return the ephemeral Enrichment session view, if any."""
+        if self._enrichment is None:
+            return None
+        return self._enrichment_view()
+
+    def start_enrichment_session(self) -> EnrichmentSessionView:
+        """Begin a new Master CV Enrichment session (discards any prior ephemeral state)."""
+        self._refresh_candidate_file_state()
+        master_path = self._master_cv.master_cv_path()
+        if not master_path:
+            raise EnrichmentError("Master CV path is not set")
+        if self._master_cv.candidate_snapshot() is None:
+            raise EnrichmentError("Master CV / Candidate Snapshot is required")
+        session_fp = fingerprint_path(master_path)
+        if session_fp is None:
+            raise EnrichmentError("Master CV is unreadable")
+        self._enrichment = _EnrichmentSession(
+            master_path=master_path,
+            session_fingerprint=session_fp,
+        )
+        return self._enrichment_view()
+
+    def submit_enrichment_freeform(self, description: str) -> EnrichmentSessionView:
+        """Accept freeform experience text and ask the enricher for placement."""
+        text = description.strip()
+        if not text:
+            raise EnrichmentError("Freeform description is required")
+        if self._enrichment is None or self._enrichment.step == "done":
+            self.start_enrichment_session()
+        assert self._enrichment is not None
+        self._enrichment.freeform = text
+        self._enrichment.error = None
+        enricher = self._require_enricher()
+        if enricher is None:
+            self._enrichment.step = "freeform"
+            return self._enrichment_view()
+        try:
+            yaml_text = Path(self._enrichment.master_path).read_text(encoding="utf-8")
+            suggestion = enricher.suggest_placement(
+                freeform=text, master_cv_yaml=yaml_text
+            )
+        except LlmUnavailableError as exc:
+            self._llm_call_error = exc.reason
+            self._enrichment.llm_unavailable_reason = exc.reason
+            self._enrichment.step = "freeform"
+            return self._enrichment_view()
+        self._llm_call_error = None
+        self._enrichment.llm_unavailable_reason = None
+        self._enrichment.placement = suggestion
+        self._enrichment.step = "placement"
+        return self._enrichment_view()
+
+    def confirm_enrichment_placement(
+        self,
+        *,
+        company: str | None = None,
+        position: str | None = None,
+        name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> EnrichmentSessionView:
+        """Confirm LLM placement (and new-entry identity) before dimension steps."""
+        session = self._require_enrichment()
+        if session.step != "placement" or session.placement is None:
+            raise EnrichmentError("Placement is not ready to confirm")
+        placement = session.placement
+        if placement.mode == "new":
+            company = (company if company is not None else placement.company) or ""
+            position = (position if position is not None else placement.position) or ""
+            name = (name if name is not None else placement.name) or ""
+            start_date = (
+                start_date if start_date is not None else placement.start_date
+            ) or None
+            end_date = (end_date if end_date is not None else placement.end_date) or None
+            if placement.section == "experience" and (
+                not company.strip() or not position.strip()
+            ):
+                raise EnrichmentError(
+                    "New experience entries require company and position"
+                )
+            if placement.section == "projects" and not name.strip():
+                raise EnrichmentError("New project entries require a name")
+            if placement.section == "education" and not (
+                company.strip() or name.strip()
+            ):
+                raise EnrichmentError("New education entries require an institution")
+            if not (start_date and start_date.strip()) and not (
+                end_date and end_date.strip()
+            ):
+                raise EnrichmentError(
+                    "New entries require user-confirmed dates (start and/or end)"
+                )
+            placement = PlacementSuggestion(
+                section=placement.section,
+                mode="new",
+                company=company.strip() or None,
+                position=position.strip() or None,
+                name=name.strip() or None,
+                start_date=start_date,
+                end_date=end_date,
+                label=placement.label,
+            )
+            session.placement = placement
+        session.step = "dimension"
+        session.dimension_index = 0
+        session.followup_prompt = None
+        return self._enrichment_view()
+
+    def submit_enrichment_dimension(self, answer: str) -> EnrichmentSessionView:
+        """Record an answer for the current dimension; optional clarifying follow-up."""
+        session = self._require_enrichment()
+        if session.step not in ("dimension", "followup"):
+            raise EnrichmentError("No active dimension step")
+        assert session.placement is not None
+        dimension = ENRICHMENT_DIMENSIONS[session.dimension_index]
+        text = answer.strip()
+        if session.step == "followup":
+            if text:
+                prior = session.dimension_answers.get(dimension, "")
+                session.dimension_answers[dimension] = (
+                    f"{prior}\n{text}".strip() if prior else text
+                )
+            session.followup_prompt = None
+            return self._advance_enrichment_dimension()
+        if not text:
+            raise EnrichmentError("Dimension answer is required (or skip)")
+        session.dimension_answers[dimension] = text
+        enricher = self._require_enricher()
+        if enricher is None:
+            return self._enrichment_view()
+        try:
+            followup = enricher.clarifying_followup(
+                dimension=dimension,
+                answer=text,
+                freeform=session.freeform,
+            )
+        except LlmUnavailableError as exc:
+            self._llm_call_error = exc.reason
+            session.llm_unavailable_reason = exc.reason
+            return self._enrichment_view()
+        self._llm_call_error = None
+        session.llm_unavailable_reason = None
+        if followup and followup.strip():
+            session.step = "followup"
+            session.followup_prompt = followup.strip()
+            return self._enrichment_view()
+        return self._advance_enrichment_dimension()
+
+    def skip_enrichment_dimension(self) -> EnrichmentSessionView:
+        """Skip the current dimension (empty) and advance."""
+        session = self._require_enrichment()
+        if session.step not in ("dimension", "followup"):
+            raise EnrichmentError("No active dimension step")
+        session.followup_prompt = None
+        return self._advance_enrichment_dimension()
+
+    def set_enrichment_highlights(self, highlights: list[str]) -> EnrichmentSessionView:
+        """Replace the editable highlights draft before confirm write."""
+        session = self._require_enrichment()
+        if session.step != "highlights":
+            raise EnrichmentError("Highlights are not ready to edit")
+        cleaned = [line.strip() for line in highlights if line.strip()]
+        session.highlights = cleaned
+        return self._enrichment_view()
+
+    def confirm_enrichment_write(self) -> EnrichmentSessionView:
+        """Atomically patch the target Master CV entry; refuse if file changed."""
+        session = self._require_enrichment()
+        if session.step != "highlights" or session.placement is None:
+            raise EnrichmentError("Highlights confirm is not ready")
+        if session.highlights is None:
+            raise EnrichmentError("Highlights draft is missing")
+        current_fp = fingerprint_path(session.master_path)
+        if current_fp != session.session_fingerprint:
+            self._enrichment = None
+            raise EnrichmentConflictError(
+                "Master CV changed since Enrichment started; restart Enrichment"
+            )
+        try:
+            original = Path(session.master_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise EnrichmentError(f"Master CV unreadable: {exc}") from exc
+        patched = patch_master_cv_entry(
+            original,
+            placement=session.placement,
+            highlights=list(session.highlights),
+        )
+        atomic_write_text(Path(session.master_path), patched)
+        session.step = "done"
+        self._enrichment = session
+        self._refresh_candidate_file_state()
+        return self._enrichment_view()
+
+    def _require_enrichment(self) -> _EnrichmentSession:
+        if self._enrichment is None:
+            raise EnrichmentError("No Enrichment session")
+        return self._enrichment
+
+    def _require_enricher(self) -> LlmCvEnricher | None:
+        enricher = self._llm_cv_enricher
+        if enricher is None:
+            reason = "LLM Unavailable: enricher not configured"
+            if self._enrichment is not None:
+                self._enrichment.llm_unavailable_reason = reason
+            self._llm_call_error = reason
+            return None
+        if not enricher.available():
+            reason = enricher.unavailable_reason() or "LLM Unavailable"
+            if self._enrichment is not None:
+                self._enrichment.llm_unavailable_reason = reason
+            self._llm_call_error = reason
+            return None
+        return enricher
+
+    def _advance_enrichment_dimension(self) -> EnrichmentSessionView:
+        session = self._require_enrichment()
+        session.dimension_index += 1
+        if session.dimension_index >= len(ENRICHMENT_DIMENSIONS):
+            return self._draft_enrichment_highlights()
+        session.step = "dimension"
+        session.followup_prompt = None
+        return self._enrichment_view()
+
+    def _draft_enrichment_highlights(self) -> EnrichmentSessionView:
+        session = self._require_enrichment()
+        assert session.placement is not None
+        enricher = self._require_enricher()
+        if enricher is None:
+            session.step = "dimension"
+            session.dimension_index = len(ENRICHMENT_DIMENSIONS) - 1
+            return self._enrichment_view()
+        try:
+            yaml_text = Path(session.master_path).read_text(encoding="utf-8")
+            kept: list[str] = []
+            if (
+                session.placement.mode == "existing"
+                and session.placement.entry_index is not None
+            ):
+                kept = existing_highlights(
+                    yaml_text,
+                    section=session.placement.section,
+                    entry_index=session.placement.entry_index,
+                )
+            drafted = enricher.draft_highlights(
+                freeform=session.freeform,
+                placement=session.placement,
+                dimension_answers=dict(session.dimension_answers),
+                existing_highlights=kept,
+            )
+        except LlmUnavailableError as exc:
+            self._llm_call_error = exc.reason
+            session.llm_unavailable_reason = exc.reason
+            session.step = "dimension"
+            session.dimension_index = len(ENRICHMENT_DIMENSIONS) - 1
+            return self._enrichment_view()
+        self._llm_call_error = None
+        session.llm_unavailable_reason = None
+        session.highlights = [line.strip() for line in drafted if str(line).strip()]
+        session.step = "highlights"
+        return self._enrichment_view()
+
+    def _enrichment_view(self) -> EnrichmentSessionView:
+        session = self._require_enrichment()
+        dimension = None
+        prompt = None
+        if session.step in ("dimension", "followup") and session.dimension_index < len(
+            ENRICHMENT_DIMENSIONS
+        ):
+            dimension = ENRICHMENT_DIMENSIONS[session.dimension_index]
+            prompt = DIMENSION_PROMPTS[dimension]
+        return EnrichmentSessionView(
+            step=session.step,
+            freeform=session.freeform,
+            placement=session.placement,
+            current_dimension=dimension,
+            dimension_prompt=prompt,
+            followup_prompt=session.followup_prompt,
+            dimension_answers=dict(session.dimension_answers),
+            highlights=None if session.highlights is None else list(session.highlights),
+            llm_unavailable_reason=session.llm_unavailable_reason,
+            error=session.error,
+        )
+
     def get_llm_unavailable_reason(self) -> str | None:
         """Pass through adapter preflight reason or last call-failure `.reason`."""
         if not self._llm_judge.available():
             return self._llm_judge.unavailable_reason()
         if not self._llm_cv_tailor.available():
             return self._llm_cv_tailor.unavailable_reason()
+        if self._llm_cv_enricher is not None and not self._llm_cv_enricher.available():
+            return self._llm_cv_enricher.unavailable_reason()
         return self._llm_call_error
 
     def get_crawl_filters(self) -> CrawlFilters:

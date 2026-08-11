@@ -11,6 +11,7 @@ from job_finding_assistant.candidate_snapshot import (
 from job_finding_assistant.constraint_files import ConstraintFileRead, read_constraint_file
 from job_finding_assistant.crawl_filters import CrawlFilters
 from job_finding_assistant.crawl_pacer import NoOpCrawlPacer
+from job_finding_assistant.enrichment import PlacementSuggestion
 from job_finding_assistant.job_board import AuthLostError, JobListEntry, JobPostingDetail
 from job_finding_assistant.ports import CrawlPacer
 from job_finding_assistant.llm_runtime import LlmUnavailableError
@@ -396,6 +397,86 @@ class FakeLlmCvTailor:
             }
         )
         return self._result
+
+
+class FakeLlmCvEnricher:
+    """Scripted Master CV Enrichment LLM steps for tests."""
+
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        placement: PlacementSuggestion | None = None,
+        followup: str | None = None,
+        highlights: list[str] | None = None,
+        fail_on_call: bool = False,
+    ) -> None:
+        self._available = available
+        self._placement = placement or PlacementSuggestion(
+            section="experience",
+            mode="existing",
+            entry_index=0,
+            label="Software Intern at Acme Corp",
+        )
+        self._followup = followup
+        self._highlights = highlights or [
+            "Built internal tools",
+            "Led cross-team delivery of a reporting dashboard",
+        ]
+        self._fail_on_call = fail_on_call
+        self.suggest_calls = 0
+        self.followup_calls = 0
+        self.draft_calls = 0
+
+    def available(self) -> bool:
+        return self._available
+
+    def unavailable_reason(self) -> str | None:
+        if self._available:
+            return None
+        return "LLM Unavailable: Fake enricher disabled"
+
+    def suggest_placement(
+        self,
+        *,
+        freeform: str,
+        master_cv_yaml: str,
+    ) -> PlacementSuggestion:
+        del freeform, master_cv_yaml
+        self._ensure_callable()
+        self.suggest_calls += 1
+        return self._placement
+
+    def clarifying_followup(
+        self,
+        *,
+        dimension: str,
+        answer: str,
+        freeform: str,
+    ) -> str | None:
+        del dimension, answer, freeform
+        self._ensure_callable()
+        self.followup_calls += 1
+        return self._followup
+
+    def draft_highlights(
+        self,
+        *,
+        freeform: str,
+        placement: PlacementSuggestion,
+        dimension_answers: dict[str, str],
+        existing_highlights: list[str],
+    ) -> list[str]:
+        del freeform, placement, dimension_answers, existing_highlights
+        self._ensure_callable()
+        self.draft_calls += 1
+        return list(self._highlights)
+
+    def _ensure_callable(self) -> None:
+        if not self._available or self._fail_on_call:
+            if not self._available:
+                raise LlmUnavailableError("Fake enricher disabled")
+            raise LlmUnavailableError("Fake enricher failed")
 
 
 class FakePdfRenderer:

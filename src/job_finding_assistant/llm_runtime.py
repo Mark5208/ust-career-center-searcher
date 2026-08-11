@@ -1,4 +1,4 @@
-"""Live OpenAI-compatible LlmJudge / LlmCvTailor (ADR-0015). Fake stays in tests only."""
+"""Live OpenAI-compatible LlmJudge / LlmCvTailor / LlmCvEnricher (ADR-0015 / 0017). Fake stays in tests only."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any, NoReturn
 import httpx
 
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
+from job_finding_assistant.enrichment import PlacementSuggestion
 from job_finding_assistant.match_assessment import (
     ConstraintOutcome,
     EvidencePair,
@@ -153,6 +154,49 @@ class UnavailableLlmCvTailor:
             hard_constraint_outcome,
             hard_constraint_reason,
         )
+        raise LlmUnavailableError(self._reason)
+
+
+class UnavailableLlmCvEnricher:
+    """Normal-app placeholder when the API key is missing (never Fake)."""
+
+    def __init__(self, reason: str = "LLM Unavailable: API key not configured") -> None:
+        self._reason = _sanitize_reason(reason)
+
+    def available(self) -> bool:
+        return False
+
+    def unavailable_reason(self) -> str:
+        return self._reason
+
+    def suggest_placement(
+        self,
+        *,
+        freeform: str,
+        master_cv_yaml: str,
+    ) -> PlacementSuggestion:
+        del freeform, master_cv_yaml
+        raise LlmUnavailableError(self._reason)
+
+    def clarifying_followup(
+        self,
+        *,
+        dimension: str,
+        answer: str,
+        freeform: str,
+    ) -> str | None:
+        del dimension, answer, freeform
+        raise LlmUnavailableError(self._reason)
+
+    def draft_highlights(
+        self,
+        *,
+        freeform: str,
+        placement: PlacementSuggestion,
+        dimension_answers: dict[str, str],
+        existing_highlights: list[str],
+    ) -> list[str]:
+        del freeform, placement, dimension_answers, existing_highlights
         raise LlmUnavailableError(self._reason)
 
 
@@ -554,6 +598,149 @@ class OpenAiCompatibleLlmCvTailor:
             _guard_unexpected(exc, fallback="unexpected tailor error")
 
 
+_ENRICH_PLACEMENT_SYSTEM = """You suggest Master CV Enrichment placement for a job-finding assistant.
+Return JSON only:
+{
+  "section": "experience" | "projects" | "education",
+  "mode": "existing" | "new",
+  "entry_index": integer or null,
+  "company": string or null,
+  "position": string or null,
+  "name": string or null,
+  "start_date": string or null,
+  "end_date": string or null,
+  "label": short human label
+}
+Rules: suggest an existing entry when the freeform clearly matches one; otherwise new under an existing section type (experience/projects/education). Never invent section types. Skills lists are hand-edited — do not place there. entry_index is 0-based within that section list for existing mode.
+"""
+
+_ENRICH_FOLLOWUP_SYSTEM = """You may ask at most one short clarifying follow-up for one Enrichment dimension.
+Return JSON: {"followup": string or null}. Use null when the answer is already clear. Do not invent facts.
+"""
+
+_ENRICH_HIGHLIGHTS_SYSTEM = """You draft an editable full highlights list for one Master CV entry.
+Return JSON: {"highlights": ["...", ...]}.
+Keep existing highlights that remain true; add new bullets only from the user's freeform and dimension answers. Never invent employers, dates, titles, skills, or outcomes the user did not affirm.
+"""
+
+
+class OpenAiCompatibleLlmCvEnricher:
+    """Live LlmCvEnricher on the same OpenAI-compatible client/model as judge/tailor."""
+
+    def __init__(self, client: OpenAiCompatibleLlmClient) -> None:
+        self._client = client
+
+    def available(self) -> bool:
+        return True
+
+    def unavailable_reason(self) -> str | None:
+        return None
+
+    def suggest_placement(
+        self,
+        *,
+        freeform: str,
+        master_cv_yaml: str,
+    ) -> PlacementSuggestion:
+        try:
+            user = (
+                f"Freeform experience:\n{freeform}\n\n"
+                f"Master CV YAML:\n{master_cv_yaml}\n"
+            )
+            data = self._client.complete_json(
+                system=_ENRICH_PLACEMENT_SYSTEM, user=user
+            )
+            section = data.get("section")
+            mode = data.get("mode")
+            if section not in ("experience", "projects", "education"):
+                raise LlmUnavailableError("invalid Enrichment section")
+            if mode not in ("existing", "new"):
+                raise LlmUnavailableError("invalid Enrichment placement mode")
+            entry_index = data.get("entry_index")
+            if mode == "existing":
+                if not isinstance(entry_index, int) or entry_index < 0:
+                    raise LlmUnavailableError("invalid Enrichment entry_index")
+            else:
+                entry_index = None
+            return PlacementSuggestion(
+                section=section,
+                mode=mode,
+                entry_index=entry_index,
+                company=_optional_str(data.get("company")),
+                position=_optional_str(data.get("position")),
+                name=_optional_str(data.get("name")),
+                start_date=_optional_str(data.get("start_date")),
+                end_date=_optional_str(data.get("end_date")),
+                label=_optional_str(data.get("label")) or "",
+            )
+        except Exception as exc:
+            _guard_unexpected(exc, fallback="unexpected enricher error")
+
+    def clarifying_followup(
+        self,
+        *,
+        dimension: str,
+        answer: str,
+        freeform: str,
+    ) -> str | None:
+        try:
+            user = (
+                f"Dimension: {dimension}\n"
+                f"Answer: {answer}\n"
+                f"Freeform: {freeform}\n"
+            )
+            data = self._client.complete_json(
+                system=_ENRICH_FOLLOWUP_SYSTEM, user=user
+            )
+            followup = data.get("followup")
+            if followup is None:
+                return None
+            text = str(followup).strip()
+            return text or None
+        except Exception as exc:
+            _guard_unexpected(exc, fallback="unexpected enricher error")
+
+    def draft_highlights(
+        self,
+        *,
+        freeform: str,
+        placement: PlacementSuggestion,
+        dimension_answers: dict[str, str],
+        existing_highlights: list[str],
+    ) -> list[str]:
+        try:
+            answers = "\n".join(
+                f"- {key}: {value}" for key, value in dimension_answers.items()
+            )
+            user = (
+                f"Freeform:\n{freeform}\n\n"
+                f"Placement: {placement.mode} {placement.section} "
+                f"index={placement.entry_index} label={placement.label}\n\n"
+                f"Existing highlights:\n"
+                f"{chr(10).join(f'- {h}' for h in existing_highlights) or '(none)'}\n\n"
+                f"Dimension answers:\n{answers or '(none)'}\n"
+            )
+            data = self._client.complete_json(
+                system=_ENRICH_HIGHLIGHTS_SYSTEM, user=user
+            )
+            raw = data.get("highlights")
+            if not isinstance(raw, list) or not raw:
+                raise LlmUnavailableError("missing Enrichment highlights")
+            highlights = [str(item).strip() for item in raw if str(item).strip()]
+            if not highlights:
+                raise LlmUnavailableError("missing Enrichment highlights")
+            return highlights
+        except Exception as exc:
+            _guard_unexpected(exc, fallback="unexpected enricher error")
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _parse_gap_report(raw: Any) -> GapReport:
     if not isinstance(raw, dict):
         return GapReport()
@@ -608,19 +795,31 @@ def build_llm_ports(
     model: str = DEFAULT_LLM_MODEL,
     http_client: httpx.Client | None = None,
     config: LlmRuntimeConfig | None = None,
-) -> tuple[OpenAiCompatibleLlmJudge | UnavailableLlmJudge, OpenAiCompatibleLlmCvTailor | UnavailableLlmCvTailor]:
-    """Build judge + tailor for the normal app path (never Fake)."""
+) -> tuple[
+    OpenAiCompatibleLlmJudge | UnavailableLlmJudge,
+    OpenAiCompatibleLlmCvTailor | UnavailableLlmCvTailor,
+    OpenAiCompatibleLlmCvEnricher | UnavailableLlmCvEnricher,
+]:
+    """Build judge + tailor + enricher for the normal app path (never Fake)."""
     if config is not None:
         api_key = config.api_key
         base_url = config.base_url
         model = config.model
     if not api_key:
         reason = "LLM Unavailable: API key not configured"
-        return UnavailableLlmJudge(reason), UnavailableLlmCvTailor(reason)
+        return (
+            UnavailableLlmJudge(reason),
+            UnavailableLlmCvTailor(reason),
+            UnavailableLlmCvEnricher(reason),
+        )
     client = OpenAiCompatibleLlmClient(
         api_key=api_key,
         base_url=base_url,
         model=model,
         http_client=http_client,
     )
-    return OpenAiCompatibleLlmJudge(client), OpenAiCompatibleLlmCvTailor(client)
+    return (
+        OpenAiCompatibleLlmJudge(client),
+        OpenAiCompatibleLlmCvTailor(client),
+        OpenAiCompatibleLlmCvEnricher(client),
+    )

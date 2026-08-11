@@ -18,6 +18,9 @@ from job_finding_assistant.assistant import (
     CrawlFilters,
     CrawlOutcome,
     DeleteNeedsConfirm,
+    EnrichmentConflictError,
+    EnrichmentError,
+    EnrichmentSessionView,
     MatchAssessmentPage,
     PreparationPacketPage,
     PrepareBlockedError,
@@ -88,6 +91,38 @@ class SupportsAssistantUi(Protocol):
     def clear_preferences_path(self) -> None:
         """Clear the Preferences path."""
 
+    def start_enrichment_session(self) -> EnrichmentSessionView:
+        """Begin Master CV Enrichment."""
+
+    def get_enrichment_session(self) -> EnrichmentSessionView | None:
+        """Return ephemeral Enrichment session, if any."""
+
+    def submit_enrichment_freeform(self, description: str) -> EnrichmentSessionView:
+        """Submit freeform Enrichment description."""
+
+    def confirm_enrichment_placement(
+        self,
+        *,
+        company: str | None = None,
+        position: str | None = None,
+        name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> EnrichmentSessionView:
+        """Confirm Enrichment placement."""
+
+    def submit_enrichment_dimension(self, answer: str) -> EnrichmentSessionView:
+        """Answer the current Enrichment dimension."""
+
+    def skip_enrichment_dimension(self) -> EnrichmentSessionView:
+        """Skip the current Enrichment dimension."""
+
+    def set_enrichment_highlights(self, highlights: list[str]) -> EnrichmentSessionView:
+        """Edit Enrichment highlights draft."""
+
+    def confirm_enrichment_write(self) -> EnrichmentSessionView:
+        """Confirm Master CV Enrichment write."""
+
     def get_crawl_filters(self) -> CrawlFilters:
         """Return Crawl Filters."""
 
@@ -121,6 +156,7 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
     app.state.assistant = assistant
     app.state.last_crawl_outcome = None
     app.state.prepare_error = None
+    app.state.enrichment_error = None
 
     @app.get("/", response_class=HTMLResponse)
     def assessment_summaries_page(
@@ -325,6 +361,110 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
         app.state.assistant.clear_preferences_path()
         return RedirectResponse(url="/candidate", status_code=303)
 
+    @app.get("/candidate/enrichment", response_class=HTMLResponse)
+    def enrichment_page(request: Request) -> HTMLResponse:
+        current = request.app.state.assistant
+        error = request.app.state.enrichment_error
+        request.app.state.enrichment_error = None
+        session = current.get_enrichment_session()
+        if session is None:
+            try:
+                session = current.start_enrichment_session()
+            except EnrichmentError as exc:
+                return _TEMPLATES.TemplateResponse(
+                    request,
+                    "enrichment.html",
+                    {
+                        "session": None,
+                        "error": str(exc),
+                    },
+                )
+        return _TEMPLATES.TemplateResponse(
+            request,
+            "enrichment.html",
+            {
+                "session": session,
+                "error": error,
+            },
+        )
+
+    @app.post("/candidate/enrichment/freeform")
+    def enrichment_freeform(
+        request: Request, description: str = Form("")
+    ) -> RedirectResponse:
+        request.app.state.enrichment_error = None
+        try:
+            request.app.state.assistant.submit_enrichment_freeform(description)
+        except EnrichmentError as exc:
+            request.app.state.enrichment_error = str(exc)
+        return RedirectResponse(url="/candidate/enrichment", status_code=303)
+
+    @app.post("/candidate/enrichment/placement")
+    def enrichment_placement(
+        request: Request,
+        company: str = Form(""),
+        position: str = Form(""),
+        name: str = Form(""),
+        start_date: str = Form(""),
+        end_date: str = Form(""),
+    ) -> RedirectResponse:
+        request.app.state.enrichment_error = None
+        try:
+            request.app.state.assistant.confirm_enrichment_placement(
+                company=company or None,
+                position=position or None,
+                name=name or None,
+                start_date=start_date or None,
+                end_date=end_date or None,
+            )
+        except EnrichmentError as exc:
+            request.app.state.enrichment_error = str(exc)
+        return RedirectResponse(url="/candidate/enrichment", status_code=303)
+
+    @app.post("/candidate/enrichment/dimension")
+    def enrichment_dimension(
+        request: Request,
+        answer: str = Form(""),
+        skip: str = Form("0"),
+    ) -> RedirectResponse:
+        request.app.state.enrichment_error = None
+        try:
+            if skip == "1":
+                request.app.state.assistant.skip_enrichment_dimension()
+            else:
+                request.app.state.assistant.submit_enrichment_dimension(answer)
+        except EnrichmentError as exc:
+            request.app.state.enrichment_error = str(exc)
+        return RedirectResponse(url="/candidate/enrichment", status_code=303)
+
+    @app.post("/candidate/enrichment/highlights")
+    def enrichment_highlights(
+        request: Request, highlights: str = Form("")
+    ) -> RedirectResponse:
+        request.app.state.enrichment_error = None
+        try:
+            lines = [line for line in highlights.splitlines() if line.strip()]
+            request.app.state.assistant.set_enrichment_highlights(lines)
+        except EnrichmentError as exc:
+            request.app.state.enrichment_error = str(exc)
+        return RedirectResponse(url="/candidate/enrichment", status_code=303)
+
+    @app.post("/candidate/enrichment/confirm")
+    def enrichment_confirm(
+        request: Request, highlights: str = Form("")
+    ) -> RedirectResponse:
+        request.app.state.enrichment_error = None
+        try:
+            lines = [line for line in highlights.splitlines() if line.strip()]
+            if lines:
+                request.app.state.assistant.set_enrichment_highlights(lines)
+            request.app.state.assistant.confirm_enrichment_write()
+        except EnrichmentConflictError as exc:
+            request.app.state.enrichment_error = str(exc)
+        except EnrichmentError as exc:
+            request.app.state.enrichment_error = str(exc)
+        return RedirectResponse(url="/candidate/enrichment", status_code=303)
+
     @app.get("/crawl", response_class=HTMLResponse)
     def crawl_page(request: Request) -> HTMLResponse:
         current = request.app.state.assistant
@@ -406,13 +546,16 @@ def build_default_assistant(db_path: Path | None = None) -> Assistant:
     data_dir = Path.home() / ".job_finding_assistant"
     catalog_path = db_path or data_dir / "catalog.db"
     crawl_pacer = RandomCrawlPacer()
-    llm_judge, llm_cv_tailor = build_llm_ports(config=load_llm_runtime_config())
+    llm_judge, llm_cv_tailor, llm_cv_enricher = build_llm_ports(
+        config=load_llm_runtime_config()
+    )
     return Assistant(
         catalog_store=CatalogStore(catalog_path),
         job_board=PlaywrightJobBoardSession(headless=False, crawl_pacer=crawl_pacer),
         master_cv=DiskMasterCvStore(data_dir / "master_cv_state"),
         llm_judge=llm_judge,
         llm_cv_tailor=llm_cv_tailor,
+        llm_cv_enricher=llm_cv_enricher,
         constraint_files=DiskConstraintFilesStore(data_dir / "constraint_files_state"),
         packet_store_dir=data_dir / "packets",
     )

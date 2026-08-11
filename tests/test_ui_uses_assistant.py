@@ -13,6 +13,7 @@ from job_finding_assistant.assistant import (
     CrawlFilters,
     CrawlOutcome,
     DeleteNeedsConfirm,
+    EnrichmentSessionView,
     MatchAssessmentPage,
     PreparationPacketPage,
     PreparationPacketView,
@@ -20,9 +21,11 @@ from job_finding_assistant.assistant import (
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.catalog_store import CatalogStore
 from job_finding_assistant.constraint_files_store import DiskConstraintFilesStore
+from job_finding_assistant.enrichment import PlacementSuggestion
 from job_finding_assistant.fakes import (
     FakeConstraintFilesStore,
     FakeJobBoardSession,
+    FakeLlmCvEnricher,
     FakeLlmCvTailor,
     FakeLlmJudge,
     FakeMasterCvStore,
@@ -203,6 +206,63 @@ class _RecordingAssistant:
     def clear_preferences_path(self) -> None:
         self.clear_preferences_calls += 1
         self.preferences_path = None
+
+    def start_enrichment_session(self) -> EnrichmentSessionView:
+        self.enrichment_session = EnrichmentSessionView(step="freeform")
+        return self.enrichment_session
+
+    def get_enrichment_session(self) -> EnrichmentSessionView | None:
+        return getattr(self, "enrichment_session", None)
+
+    def submit_enrichment_freeform(self, description: str) -> EnrichmentSessionView:
+        self.enrichment_freeform_calls = getattr(self, "enrichment_freeform_calls", [])
+        self.enrichment_freeform_calls.append(description)
+        self.enrichment_session = EnrichmentSessionView(
+            step="placement",
+            freeform=description,
+            placement=PlacementSuggestion(
+                section="experience",
+                mode="existing",
+                entry_index=0,
+                label="Software Intern at Acme Corp",
+            ),
+        )
+        return self.enrichment_session
+
+    def confirm_enrichment_placement(
+        self,
+        *,
+        company: str | None = None,
+        position: str | None = None,
+        name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> EnrichmentSessionView:
+        del company, position, name, start_date, end_date
+        self.enrichment_session = EnrichmentSessionView(
+            step="dimension",
+            freeform=self.enrichment_session.freeform if self.enrichment_session else "",
+            current_dimension="problem_context",
+            dimension_prompt="What problem or context were you working in?",
+        )
+        return self.enrichment_session
+
+    def submit_enrichment_dimension(self, answer: str) -> EnrichmentSessionView:
+        del answer
+        return self.enrichment_session or EnrichmentSessionView(step="dimension")
+
+    def skip_enrichment_dimension(self) -> EnrichmentSessionView:
+        return self.enrichment_session or EnrichmentSessionView(step="dimension")
+
+    def set_enrichment_highlights(self, highlights: list[str]) -> EnrichmentSessionView:
+        self.enrichment_session = EnrichmentSessionView(
+            step="highlights", highlights=list(highlights)
+        )
+        return self.enrichment_session
+
+    def confirm_enrichment_write(self) -> EnrichmentSessionView:
+        self.enrichment_session = EnrichmentSessionView(step="done")
+        return self.enrichment_session
 
     def get_crawl_filters(self) -> CrawlFilters:
         return self.crawl_filters
@@ -432,6 +492,35 @@ def test_candidate_page_calls_assistant_for_snapshot_and_constraint_paths() -> N
     assert "/tmp/prefs.txt" in response.text
     assert 'action="/crawl/filters"' not in response.text
     assert "LaTeX" not in response.text
+    assert "/candidate/enrichment" in response.text
+    assert "Master CV Enrichment" in response.text
+
+
+def test_enrichment_page_posts_freeform_through_assistant() -> None:
+    assistant = _RecordingAssistant()
+    assistant.master_cv_path = "/tmp/master_CV.yaml"
+    assistant.snapshot = CandidateSnapshot(
+        contact="Alice",
+        education=[],
+        experience=["Software Intern at Acme Corp"],
+        projects=[],
+        skills_tools=[],
+    )
+    client = TestClient(create_app(assistant))
+
+    page = client.get("/candidate/enrichment")
+    assert page.status_code == 200
+    assert "Describe an experience" in page.text
+
+    response = client.post(
+        "/candidate/enrichment/freeform",
+        data={"description": "Led a reporting dashboard"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert assistant.enrichment_freeform_calls == ["Led a reporting dashboard"]
+    placed = client.get("/candidate/enrichment")
+    assert "Confirm placement" in placed.text
 
 
 def test_candidate_page_posts_paths_through_assistant(tmp_path: Path) -> None:
