@@ -1,6 +1,6 @@
 # Architecture — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014; LLM runtime: ADR-0015; HC/Preference Evidence: ADR-0016. This file describes the **current running code**.
+Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 0005–0014; LLM runtime: ADR-0015; HC/Preference Evidence: ADR-0016; Master CV Enrichment: ADR-0017. This file describes the **current running code**.
 
 ## Runtime shape
 
@@ -8,12 +8,12 @@ Authoritative product language: `CONTEXT.md`. Decided assessment/CV model: ADRs 
 - **Application seam:** `Assistant` — the only surface the UI and automated tests call.
 - **Persistence:** SQLite via `CatalogStore` (Job Postings, Crawl Filters, Match Assessments, candidate-file fingerprints).
 - **Preparation Packets:** tool-managed filesystem store (`PacketStore`) keyed by Job Posting id (Gap Report, Edit Summary, Tailored YAML, optional PDF); Stale flagged in packet meta on Master CV / HC / Preferences change. Assessment Summary listing uses `presence_flags` (exists + Stale only); full `get` remains for Prepare / packet page / Delete / downloads.
-- **Master CV:** RenderCV YAML on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; never overwrites the YAML file). Python ≥3.12; `rendercv` dependency present. Public reads of paths / Snapshot / path-read errors go through `Assistant.get_candidate_files()` → `CandidateFilesView`; mutations stay named set/clear methods (no Master CV clear).
+- **Master CV:** RenderCV YAML on disk via `DiskMasterCvStore` (path + Candidate Snapshot rebuild; path setters do not overwrite YAML). **Master CV Enrichment** may atomically patch one target entry on explicit confirm (`enrichment.patch_master_cv_entry` + `atomic_write_text`). Public reads of paths / Snapshot / path-read errors go through `Assistant.get_candidate_files()` → `CandidateFilesView`; mutations stay named set/clear methods (no Master CV clear) plus Enrichment session methods.
 - **Hard Constraints / Preferences:** plain-text file paths via `DiskConstraintFilesStore` (tool reads only; empty/missing → unknown without judge). Included in `CandidateFilesView` with Master CV.
 - **Job Board:** Playwright `JobBoardSession` (User-Attended Login + Crawl); faked in tests. Live adapter marshals all sync Playwright calls onto one dedicated worker thread (FastAPI’s sync threadpool would otherwise raise `greenlet.error` on later `/crawl` loads).
 - **Crawl pacing:** `CrawlPacer` lives on `JobBoardSession` only — random delays before detail fetches (1–3s) and between list pages (0.5–1.5s); faked/no-op in tests. `Assistant` does not take a pacer.
 - **Crawl catalog sync:** `CatalogStore.apply_crawl_list_presence` / `commit_crawl_detail` own fingerprint skip, reopen-as-Open, upsert, and Pending clear. `Assistant.run_crawl` keeps auth, Hardline, board I/O, `AuthLostError` → partial success, and Closing-capable `mark_missing_open_postings_closed` after a completed loop.
-- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary). Normal app path: OpenAI-compatible live client from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / model; ADR-0015). Missing key → unavailable adapters (not Fake). Fake stays for tests only. Judge/tailor adapters own **LLM Unavailable** reasons end-to-end: preflight via `unavailable_reason()`, call failures only as `LlmUnavailableError` (provider/parse/timeout/unexpected → short safe `.reason`; Fake matches that contract). `Assistant` caches the adapter `.reason` unchanged for `get_llm_unavailable_reason()` / catalog. Catalog load via `load_assessment_summary_catalog` budgets up to five Pending postings per call (sequential; early-stop that load on LLM Unavailable; refresh continues); `rejudge_pending_assessments` stays one Pending per call (Crawl / file-change). On `llm_failed`/`skipped`, that id is deferred for the process so later Pending Job Postings still advance (retry deferred heads after a full pass); live HTTP timeout 30s → LLM Unavailable. Compatible hosts (e.g. DeepSeek) need matching `JOB_FINDING_ASSISTANT_LLM_MODEL`, not the OpenAI default.
+- **LLM ports:** `LlmJudge` (Hard Constraint / Preference / Relevance with input isolation); `LlmCvTailor` (Gap Report / Tailored CV / Edit Summary); `LlmCvEnricher` (placement / follow-up / highlights draft). Normal app path: OpenAI-compatible live client from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / model; ADR-0015). Missing key → unavailable adapters (not Fake). Fake stays for tests only. Adapters own **LLM Unavailable** reasons end-to-end. `Assistant` caches the adapter `.reason` unchanged for `get_llm_unavailable_reason()` / catalog / Enrichment. Catalog load via `load_assessment_summary_catalog` budgets up to five Pending postings per call (sequential; early-stop that load on LLM Unavailable; refresh continues); `rejudge_pending_assessments` stays one Pending per call (Crawl / file-change). On `llm_failed`/`skipped`, that id is deferred for the process so later Pending Job Postings still advance (retry deferred heads after a full pass); live HTTP timeout 30s → LLM Unavailable. Compatible hosts (e.g. DeepSeek) need matching `JOB_FINDING_ASSISTANT_LLM_MODEL`, not the OpenAI default.
 - **PDF:** `PdfRenderer` (`RenderCvPdfRenderer` via RenderCV CLI; `FakePdfRenderer` in tests). PDF-only failure leaves packet without PDF.
 
 ```
@@ -24,6 +24,7 @@ Browser → FastAPI/Jinja → Assistant → CatalogStore (SQLite)
                               ├→ ConstraintFilesStore (DiskConstraintFilesStore)
                               ├→ LlmJudge (OpenAI-compatible live / Unavailable / Fake in tests)
                               ├→ LlmCvTailor (same client+model as judge / Unavailable / Fake in tests)
+                              ├→ LlmCvEnricher (same client+model / Unavailable / Fake in tests)
                               └→ PdfRenderer (RenderCV / Fake)
 ```
 
@@ -83,7 +84,8 @@ Preparation Packet artifacts live under the tool-managed `PacketStore` directory
 
 ```
 src/job_finding_assistant/
-  assistant.py              # Assistant + AssessmentSummary + page loads + CandidateFilesView + Prepare + CrawlOutcome
+  assistant.py              # Assistant + AssessmentSummary + page loads + CandidateFilesView + Enrichment + Prepare + CrawlOutcome
+  enrichment.py             # Enrichment types + Master CV entry patch / atomic write (ADR-0017)
   preparation_packet.py     # GapReport, EditSummary, TailorResult, PreparationPacket
   packet_store.py           # Tool-managed PacketStore (filesystem)
   pdf_renderer.py           # RenderCvPdfRenderer + PdfRenderError
@@ -95,14 +97,14 @@ src/job_finding_assistant/
   job_board.py              # JobListEntry, JobPostingDetail, AuthLostError, CrawlOutcome
   playwright_job_board.py   # Live Playwright JobBoardSession
   candidate_snapshot.py     # CandidateSnapshot + RenderCV YAML section parse
-  master_cv_store.py        # DiskMasterCvStore (path state; read-only Master CV YAML)
+  master_cv_store.py        # DiskMasterCvStore (path state; Snapshot rebuild)
   catalog_store.py          # SQLite CatalogStore + JobPosting + AssessmentSummaryRow
   ports.py                  # Protocols for adapters
-  llm_runtime.py            # OpenAI-compatible LlmJudge / LlmCvTailor + Unavailable (ADR-0015)
+  llm_runtime.py            # OpenAI-compatible LlmJudge / LlmCvTailor / LlmCvEnricher + Unavailable
   fakes.py                  # Test fakes (never wired into build_default_assistant)
   web/
     app.py                  # create_app(assistant), main()
-    templates/              # catalog + match assessment detail + candidate + crawl + packet + prepare/delete confirm
+    templates/              # catalog + match assessment + candidate + enrichment + crawl + packet + confirms
 tests/                      # Behavior through Assistant (+ UI→Assistant)
 ```
 
@@ -116,9 +118,11 @@ Assessment Summary projection: typed `AssessmentSummaryRow` from catalog + `Pack
 - `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)
 - `/jobs/{id}/packet` — Preparation Packet via `Assistant.load_preparation_packet_page` (title/employer + Gap Report → Edit Summary → Tailored downloads + compact current Match Assessment; no opportunistic rejudge; link to detail for full Evidence lists)
 - `/jobs/{id}/packet/yaml` / `/jobs/{id}/packet/pdf` — downloads
-- `/candidate` — set Master CV / Hard Constraints / Preferences paths; inspect Candidate Snapshot; path/read errors (page reads `get_candidate_files()`)
+- `/candidate` — set Master CV / Hard Constraints / Preferences paths; inspect Candidate Snapshot; link to Master CV Enrichment; path/read errors (page reads `get_candidate_files()`)
+- `/candidate/enrichment` — Master CV Enrichment step UI (freeform → placement → dimensions → highlights → confirm write) via `Assistant` Enrichment session
 - `/crawl` — User-Attended Login, Crawl Filters, Incremental Crawl / Full Refresh
 - POST `/candidate/master-cv`, `/candidate/hard-constraints`, `/candidate/preferences` (+ clear) — mutate only via Assistant
+- POST `/candidate/enrichment/*` — Enrichment freeform / placement / dimension / highlights / confirm
 - POST `/crawl/login`, POST `/crawl/filters`, POST `/crawl/run` — mutate only via Assistant
 
 ## How to run

@@ -5,6 +5,7 @@ from typing import Protocol, runtime_checkable
 from job_finding_assistant.candidate_snapshot import CandidateSnapshot
 from job_finding_assistant.constraint_files import ConstraintFileRead
 from job_finding_assistant.crawl_filters import CrawlFilters
+from job_finding_assistant.enrichment import PlacementSuggestion
 from job_finding_assistant.job_board import JobListEntry, JobPostingDetail
 from job_finding_assistant.match_assessment import (
     ConstraintOutcome,
@@ -143,6 +144,44 @@ class LlmCvTailor(Protocol):
         hard_constraint_reason: str,
     ) -> TailorResult:
         """Produce Gap Report, Tailored YAML, and Edit Summary for one Prepare."""
+
+
+@runtime_checkable
+class LlmCvEnricher(Protocol):
+    """LLM port for Master CV Enrichment (placement, follow-up, highlights draft)."""
+
+    def available(self) -> bool:
+        """Return whether the enricher port can be used."""
+
+    def unavailable_reason(self) -> str | None:
+        """Short non-secret LLM Unavailable reason when not available; else None."""
+
+    def suggest_placement(
+        self,
+        *,
+        freeform: str,
+        master_cv_yaml: str,
+    ) -> PlacementSuggestion:
+        """Suggest existing or new entry placement under an existing section."""
+
+    def clarifying_followup(
+        self,
+        *,
+        dimension: str,
+        answer: str,
+        freeform: str,
+    ) -> str | None:
+        """Return at most one clarifying follow-up for this dimension, or None."""
+
+    def draft_highlights(
+        self,
+        *,
+        freeform: str,
+        placement: PlacementSuggestion,
+        dimension_answers: dict[str, str],
+        existing_highlights: list[str],
+    ) -> list[str]:
+        """Draft editable full highlights list (kept existing + new from answers)."""
 
 
 @runtime_checkable

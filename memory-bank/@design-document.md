@@ -1,8 +1,8 @@
 # Design document — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0016`. Parent spec: GitHub issue #1.
+Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0017`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0016 Prepare/assessment/CV/LLM slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with Relevance Evidence + Hard Constraint / Preference Evidence + short reasons), Master CV Snapshot, constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` (env key; Unavailable when missing; Fake only in tests). Accordion / richer Match Assessment nav remains out of v1.
+**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with Relevance Evidence + Hard Constraint / Preference Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests). Match Assessment **Signal Summary + Signal Sections** decided (grill → GitHub #21); **not implemented in UI yet**. Catalog **Bulk Prepare / Bulk Delete** and **LLM Run** activity UX decided (#22 / #23); **not implemented in UI yet**.
 
 ## Primary seam
 
@@ -50,24 +50,32 @@ Implemented through `Assistant` / `MatchAssessment` / `CatalogStore` (persisted 
 
 - Hard Constraint Evidence and Preference Evidence lists on Match Assessment detail with signal-specific counterpart labels; empty lists allowed (no padding from short reasons).
 - Assessment Summary stays bands-only; Preparation Packet keeps a compact strip (bands + short reasons) with a link to Match Assessment for full lists.
-- Pre-upgrade complete rows load empty HC/Preference Evidence until a natural rejudge. Accordion remains parked. Parent: GitHub #19.
+- Pre-upgrade complete rows load empty HC/Preference Evidence until a natural rejudge. Parent: GitHub #19 (closed). Nav/Signal Sections: GitHub #21.
 
 ### LLM runtime (ADR-0015)
 
-`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` (not Fake). Judge/tailor adapters own short non-secret **LLM Unavailable** reasons (`unavailable_reason()` + `LlmUnavailableError.reason`); `Assistant` only pass-through-caches them for the catalog / Prepare error. Provider/parse/timeout/unexpected failures → Pending or keep prior assessment; Prepare tailor failures stay atomic. Assessment Summary `GET /` uses `load_assessment_summary_catalog` (one refresh + at most five Pending rejudge attempts + progress banner; early-stop that load on LLM Unavailable); `rejudge_pending_assessments` stays one Pending per call for Crawl / file-change. Failed/skipped heads are deferred so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no confirm-before-batch; no LLM batch pacing beyond sequential in-request calls.
+`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor + enricher). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` / `UnavailableLlmCvEnricher` (not Fake). Judge/tailor/enricher adapters own short non-secret **LLM Unavailable** reasons (`unavailable_reason()` + `LlmUnavailableError.reason`); `Assistant` only pass-through-caches them for the catalog / Prepare / Enrichment error. Provider/parse/timeout/unexpected failures → Pending or keep prior assessment; Prepare tailor failures stay atomic. Assessment Summary `GET /` uses `load_assessment_summary_catalog` (one refresh + at most five Pending rejudge attempts + progress banner; early-stop that load on LLM Unavailable); `rejudge_pending_assessments` stays one Pending per call for Crawl / file-change. Failed/skipped heads are deferred so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no confirm-before-batch; no LLM batch pacing beyond sequential in-request calls. **LLM Run** activity UX (explicit catalog assess + poll/Stop) is decided in ADR-0015 / #23 but not shipped in UI yet.
 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 
-- Master CV is RenderCV YAML on disk; tool never overwrites it; Candidate Snapshot rebuilds from YAML.
+- Master CV is RenderCV YAML on disk; Prepare/tailor never overwrite it; Candidate Snapshot rebuilds from YAML.
 - Tailored YAML is rendered to PDF via RenderCV at Prepare (`RenderCvPdfRenderer`; PDF-only failure may leave packet without PDF); ADR-0003 no-fabrication rules still apply with YAML structure preservation.
 - Python ≥3.12 required for RenderCV; LaTeX Master CV not retained for v1.
+
+### Master CV Enrichment (ADR-0017)
+
+Implemented through `Assistant` Enrichment session + `LlmCvEnricher` + `/candidate/enrichment` UI (parent #20):
+
+- Freeform → placement suggest/confirm → fixed dimension step flow → editable highlights → confirm write.
+- Atomic target-entry patch only; fingerprint refuse if Master CV changed mid-session; ephemeral session.
+- Prepare/tailor never write Master CV; Fake enricher tests-only; same env client/model as judge/tailor.
 
 ### Tailored CV formatting (ADR-0009)
 
 Implemented at the `LlmCvTailor.tailor` call site (live OpenAI-compatible prompts; Fake scripts results in tests):
 
 - “Higher on the page” = earlier RenderCV YAML order after render; no pixel layout.
-- Operation priority and pin rules in the live tailor prompt (ADR-0009); Fake returns scripted YAML + Edit Summary.
+- Operation priority and pin rules in the live tailor prompt (ADR-0009); Fake returns scripted YAML + Edit Summary. Docs now prefer reorder + select/omit for apply length from a rich dossier Master; live prompt may lag until Enrichment ships.
 - Optional `assistant.pinned_section_order` is stripped before PDF render.
 
 ### Gap Report (ADR-0011)
@@ -95,6 +103,7 @@ Implemented through `Assistant.prepare` / `load_preparation_packet_page` (UI) / 
 - Stale only when Master CV / HC file / Preferences file change; Stale packets stay readable with banner; Crawl detail does not Stale.
 - Tool-managed packet store (keyed by Job Posting); download PDF/YAML; Gap Report / Edit Summary UI-only in v1.
 - Delete confirms then hard-removes posting + assessment + packet (no trash/undo).
+- **Bulk Prepare / Bulk Delete** (catalog checkboxes): decided in docs (grill 2026-08-11); **not implemented in UI yet**. Parent after promotion from #17. Single-item Prepare/Delete remain on Match Assessment detail.
 
 ## Scaffold slice (issue #2)
 

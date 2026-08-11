@@ -49,4 +49,23 @@ From the packet view, the user may **download Tailored PDF** and **download Tail
 
 ## Delete
 
-**Delete** always requires a **confirm** that names the Job Posting, Match Assessment, and Preparation Packet (if any). On confirm, hard-remove all of them from the catalog and tool-managed store. No trash or undo in v1.
+**Delete** always requires a **confirm** that names the Job Posting, Match Assessment, and Preparation Packet (if any). On confirm, hard-remove all of them from the catalog and tool-managed store. No trash or undo in v1. Match Assessment detail keeps single-item Delete.
+
+## Bulk Prepare and Bulk Delete (Assessment Summary catalog)
+
+Catalog row checkboxes + select-all (every **currently visible** row under active filters/toggles, including Pending). Catalog does **not** show per-row Prepare/Delete; those remain on Match Assessment detail. Empty selection → Bulk actions are no-ops with a short message.
+
+### Bulk Prepare
+
+- Eligible set = selected rows where Prepare is allowed (`can_prepare`); **skip** Pending and other not-ready rows; report prepared / skipped / failed / stopped counts.
+- **Confirm:** one combined page listing every eligible posting that needs Hard Constraint fail confirm (quote each short fail reason) and every eligible posting that would overwrite an existing packet. If none of the eligible set needs confirm, run immediately (same spirit as single first-time Prepare).
+- Run **sequentially**. Per-posting packet atomicity unchanged (this ADR’s Failure atomicity).
+- On **LLM Unavailable** mid-batch: keep successes; **stop** the rest of the batch.
+- On other per-posting Prepare failures: keep successes; **record** the failure; **continue** with remaining eligible postings.
+- **No hard batch-size cap**; no spend meter.
+
+### Bulk Delete
+
+- One confirm page listing **every** selected posting (identity) and whether each has a Match Assessment / Preparation Packet.
+- On confirm, hard-delete the selection **sequentially** with the same cascade as single Delete. No trash or undo.
+- **No hard batch-size cap**.

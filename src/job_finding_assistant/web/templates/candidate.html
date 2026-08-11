@@ -115,7 +115,10 @@
       <p>Master CV, Hard Constraints, and Preferences file paths (tool reads only).</p>
 
       <h2>Master CV</h2>
-      <p class="hint">The tool never overwrites your Master CV file.</p>
+      <p class="hint">
+        The tool does not overwrite your Master CV from Prepare. Master CV Enrichment may
+        write only on explicit confirm.
+      </p>
       <form method="post" action="/candidate/master-cv">
         <label for="master_cv_path">Master CV YAML path (RenderCV)</label>
         <input
@@ -130,6 +133,7 @@
 
       <h2>Candidate Snapshot</h2>
       <p class="hint">Derived from the Master CV — inspectable, not hand-editable.</p>
+      <p class="hint"><a href="/candidate/enrichment">Master CV Enrichment</a> — deepen one entry (writes only on confirm).</p>
       {% if snapshot %}
       <dl>
         <dt>Contact</dt>

@@ -16,8 +16,10 @@ from job_finding_assistant.llm_runtime import (
     DEFAULT_LLM_MODEL,
     LlmUnavailableError,
     OpenAiCompatibleLlmClient,
+    OpenAiCompatibleLlmCvEnricher,
     OpenAiCompatibleLlmCvTailor,
     OpenAiCompatibleLlmJudge,
+    UnavailableLlmCvEnricher,
     UnavailableLlmCvTailor,
     UnavailableLlmJudge,
     build_llm_ports,
@@ -96,15 +98,18 @@ def test_env_overrides_base_url_and_model() -> None:
 
 
 def test_build_llm_ports_without_key_are_unavailable_not_fake() -> None:
-    judge, tailor = build_llm_ports(api_key=None)
+    judge, tailor, enricher = build_llm_ports(api_key=None)
     assert isinstance(judge, UnavailableLlmJudge)
     assert isinstance(tailor, UnavailableLlmCvTailor)
+    assert isinstance(enricher, UnavailableLlmCvEnricher)
     assert not isinstance(judge, FakeLlmJudge)
     assert not isinstance(tailor, FakeLlmCvTailor)
     assert judge.available() is False
     assert tailor.available() is False
+    assert enricher.available() is False
     assert judge.unavailable_reason() == "LLM Unavailable: API key not configured"
     assert tailor.unavailable_reason() == "LLM Unavailable: API key not configured"
+    assert enricher.unavailable_reason() == "LLM Unavailable: API key not configured"
 
 
 def test_build_default_assistant_never_wires_fake_llm(
@@ -114,7 +119,7 @@ def test_build_default_assistant_never_wires_fake_llm(
     monkeypatch.setenv("HOME", str(tmp_path))
     captured: list[object] = []
 
-    def tracking_build_llm_ports(**kwargs: object) -> tuple[object, object]:
+    def tracking_build_llm_ports(**kwargs: object) -> tuple[object, object, object]:
         ports = build_llm_ports(**kwargs)  # type: ignore[arg-type]
         captured.extend(ports)
         return ports
@@ -124,9 +129,10 @@ def test_build_default_assistant_never_wires_fake_llm(
         tracking_build_llm_ports,
     )
     assistant = build_default_assistant(db_path=tmp_path / "catalog.db")
-    assert len(captured) == 2
+    assert len(captured) == 3
     assert isinstance(captured[0], UnavailableLlmJudge)
     assert isinstance(captured[1], UnavailableLlmCvTailor)
+    assert isinstance(captured[2], UnavailableLlmCvEnricher)
     assert not isinstance(captured[0], FakeLlmJudge)
     assert not isinstance(captured[1], FakeLlmCvTailor)
     assert assistant.get_llm_unavailable_reason() == (
@@ -141,7 +147,7 @@ def test_build_default_assistant_uses_live_ports_when_key_present(
     monkeypatch.setenv("HOME", str(tmp_path))
     captured: list[object] = []
 
-    def tracking_build_llm_ports(**kwargs: object) -> tuple[object, object]:
+    def tracking_build_llm_ports(**kwargs: object) -> tuple[object, object, object]:
         ports = build_llm_ports(**kwargs)  # type: ignore[arg-type]
         captured.extend(ports)
         return ports
@@ -153,6 +159,7 @@ def test_build_default_assistant_uses_live_ports_when_key_present(
     assistant = build_default_assistant(db_path=tmp_path / "catalog.db")
     assert isinstance(captured[0], OpenAiCompatibleLlmJudge)
     assert isinstance(captured[1], OpenAiCompatibleLlmCvTailor)
+    assert isinstance(captured[2], OpenAiCompatibleLlmCvEnricher)
     assert assistant.get_llm_unavailable_reason() is None
 
 
@@ -456,11 +463,12 @@ def test_judge_and_tailor_share_one_model_from_build_llm_ports() -> None:
         )
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
-    judge, tailor = build_llm_ports(
+    judge, tailor, enricher = build_llm_ports(
         api_key="sk-test",
         model="one-model",
         http_client=http,
     )
+    assert enricher.available() is True
     judge.judge_relevance(
         job_detail_fields={"title": "SWE"},
         candidate_snapshot=_snapshot(),
