@@ -20,6 +20,8 @@ from job_finding_assistant.assistant import (
     CrawlOutcome,
     DeleteNeedsConfirm,
     EnrichmentSessionView,
+    LlmRunAlreadyInFlight,
+    LlmRunStatus,
     MatchAssessmentPage,
     PreparationPacketPage,
     PreparationPacketView,
@@ -57,7 +59,6 @@ class _RecordingAssistant:
         self.match_assessment_page_calls: list[str] = []
         self.preparation_packet_page_calls: list[str] = []
         self.rejudge_calls = 0
-        self.processed_this_load = 0
         self.pending_remaining = 0
         self.master_cv_path: str | None = None
         self.snapshot: CandidateSnapshot | None = None
@@ -83,6 +84,9 @@ class _RecordingAssistant:
             "Match Assessment, and Preparation Packet. No undo."
         )
         self.bulk_prepare_calls: list[tuple[list[str], bool]] = []
+        self.bulk_prepare_llm_run_calls: list[tuple[list[str], bool]] = []
+        self.catalog_assess_llm_run_calls = 0
+        self.stop_llm_run_calls = 0
         self.bulk_delete_calls: list[tuple[list[str], bool]] = []
         self.bulk_prepare_needs_confirm = False
         self.bulk_delete_needs_confirm = False
@@ -91,6 +95,8 @@ class _RecordingAssistant:
         )
         self.bulk_delete_result = BulkDeleteResult(deleted=[])
         self.match_assessments: dict[str, MatchAssessment] = {}
+        self.llm_run_status = LlmRunStatus(active=False)
+        self.llm_run_already_in_flight = False
 
     def load_assessment_summary_catalog(
         self,
@@ -113,11 +119,11 @@ class _RecordingAssistant:
         pending = sum(1 for summary in self.summaries if summary.pending)
         return AssessmentSummaryCatalog(
             rows=rows,
-            processed_this_load=self.processed_this_load,
             pending_remaining=(
                 self.pending_remaining if self.pending_remaining else pending
             ),
             llm_unavailable_reason=self.llm_unavailable_reason,
+            llm_run=self.llm_run_status,
         )
 
     def load_match_assessment_page(
@@ -193,6 +199,16 @@ class _RecordingAssistant:
         self, job_posting_ids: list[str], *, confirm: bool = False
     ) -> BulkPrepareResult:
         self.bulk_prepare_calls.append((list(job_posting_ids), confirm))
+        return self.bulk_prepare_result
+
+    def start_bulk_prepare_llm_run(
+        self, job_posting_ids: list[str], *, confirm: bool = False
+    ) -> LlmRunStatus:
+        self.bulk_prepare_llm_run_calls.append((list(job_posting_ids), confirm))
+        if self.llm_run_already_in_flight:
+            raise LlmRunAlreadyInFlight(
+                "Already judging… stop or wait for the current LLM Run."
+            )
         if self.bulk_prepare_needs_confirm and not confirm:
             raise BulkPrepareNeedsConfirm(
                 [
@@ -208,7 +224,49 @@ class _RecordingAssistant:
                 eligible_ids=list(job_posting_ids),
                 skipped_ids=[],
             )
-        return self.bulk_prepare_result
+        self.llm_run_status = LlmRunStatus(
+            active=True,
+            phase="Preparing",
+            current_index=1,
+            total=max(1, len(job_posting_ids)),
+        )
+        return self.llm_run_status
+
+    def start_catalog_assess_llm_run(self) -> LlmRunStatus:
+        self.catalog_assess_llm_run_calls += 1
+        if self.llm_run_already_in_flight:
+            raise LlmRunAlreadyInFlight(
+                "Already judging… stop or wait for the current LLM Run."
+            )
+        self.llm_run_status = LlmRunStatus(
+            active=True,
+            phase="Judging",
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            current_index=1,
+            total=5,
+        )
+        return self.llm_run_status
+
+    def get_llm_run_status(self) -> LlmRunStatus:
+        return self.llm_run_status
+
+    def stop_llm_run(self) -> LlmRunStatus:
+        self.stop_llm_run_calls += 1
+        self.llm_run_status = LlmRunStatus(
+            active=self.llm_run_status.active,
+            phase=self.llm_run_status.phase,
+            job_posting_id=self.llm_run_status.job_posting_id,
+            title=self.llm_run_status.title,
+            employer=self.llm_run_status.employer,
+            current_index=self.llm_run_status.current_index,
+            total=self.llm_run_status.total,
+            stop_requested=True,
+            message=self.llm_run_status.message,
+            bulk_prepare_result=self.llm_run_status.bulk_prepare_result,
+        )
+        return self.llm_run_status
 
     def bulk_delete(
         self, job_posting_ids: list[str], *, confirm: bool = False
@@ -410,9 +468,8 @@ def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pendi
     assert assistant.match_assessment_page_calls == []
 
 
-def test_catalog_page_shows_rejudge_progress_banner() -> None:
+def test_catalog_page_shows_llm_run_controls_and_pending_count() -> None:
     assistant = _RecordingAssistant()
-    assistant.processed_this_load = 1
     assistant.pending_remaining = 7
     assistant.summaries = [
         AssessmentSummary(
@@ -429,9 +486,66 @@ def test_catalog_page_shows_rejudge_progress_banner() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "Processed 1 Pending this load" in response.text
-    assert "7 still Pending" in response.text
-    assert "Refresh to continue" in response.text
+    assert "7 Pending" in response.text
+    assert "Assess Pending" in response.text
+    assert 'action="/llm-run/assess"' in response.text
+    assert "Processed 1 Pending this load" not in response.text
+
+
+def test_catalog_page_shows_active_llm_run_status_and_stop() -> None:
+    assistant = _RecordingAssistant()
+    assistant.pending_remaining = 3
+    assistant.llm_run_status = LlmRunStatus(
+        active=True,
+        phase="Judging",
+        job_posting_id="86534",
+        title="System Engineer",
+        employer="Example Corp",
+        current_index=2,
+        total=5,
+    )
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=True,
+        ),
+    ]
+    client = TestClient(create_app(assistant))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Judging:" in response.text
+    assert "System Engineer — Example Corp" in response.text
+    assert "2 of 5" in response.text
+    assert 'action="/llm-run/stop"' in response.text
+    assert "Assess Pending" not in response.text
+
+
+def test_catalog_llm_run_routes_use_assistant() -> None:
+    assistant = _RecordingAssistant()
+    client = TestClient(create_app(assistant))
+
+    start = client.post("/llm-run/assess", follow_redirects=False)
+    assert start.status_code == 303
+    assert assistant.catalog_assess_llm_run_calls == 1
+
+    status = client.get("/llm-run/status")
+    assert status.status_code == 200
+    assert status.json()["active"] is True
+    assert status.json()["phase"] == "Judging"
+
+    stop = client.post(
+        "/llm-run/stop",
+        headers={"Accept": "application/json"},
+    )
+    assert stop.status_code == 200
+    assert assistant.stop_llm_run_calls == 1
+    assert stop.json()["stop_requested"] is True
 
 
 def test_catalog_page_passes_closed_and_passed_toggles_to_assistant() -> None:
@@ -466,8 +580,10 @@ def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -
     assert "No Job Postings" in response.text
 
 
-def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
-    """Catalog GET budgets at most five Pending postings (ADR-0015 opportunistic)."""
+def test_catalog_get_is_fast_and_assess_llm_run_budgets_five(tmp_path: Path) -> None:
+    """GET / does not judge; explicit assess LLM Run budgets five (ADR-0015)."""
+    import time
+
     cv_path = tmp_path / "master_CV.yaml"
     cv_path.write_text(
         "cv:\n  name: Test\n  sections:\n    experience:\n      - company: X\n        position: Y\n",
@@ -517,9 +633,17 @@ def test_catalog_returns_before_full_rejudge_budget(tmp_path: Path) -> None:
     response = client.get("/")
 
     assert response.status_code == 200
+    assert judge.judge_calls == 0
+    assert "6 Pending" in response.text
+    assert "Assess Pending" in response.text
+
+    start = client.post("/llm-run/assess", follow_redirects=False)
+    assert start.status_code == 303
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and assistant.get_llm_run_status().active:
+        time.sleep(0.01)
+    assert not assistant.get_llm_run_status().active
     assert judge.judge_calls == 5
-    assert "Processed 5 Pending this load" in response.text
-    assert "1 still Pending" in response.text
     pending_after = sum(
         1 for row in assistant.list_assessment_summaries() if row.pending
     )
@@ -709,7 +833,7 @@ def test_catalog_bulk_prepare_and_packet_routes_use_assistant() -> None:
     )
     assert prepare.status_code == 303
     assert prepare.headers["location"] == "/"
-    assert assistant.bulk_prepare_calls == [(["86534"], False)]
+    assert assistant.bulk_prepare_llm_run_calls == [(["86534"], False)]
 
     packet = PreparationPacket(
         job_posting_id="86534",
@@ -776,7 +900,7 @@ def test_catalog_bulk_prepare_shows_combined_confirm() -> None:
     assert needs_confirm.status_code == 200
     assert "Confirm Bulk Prepare" in needs_confirm.text
     assert "Requires relocation outside Hong Kong" in needs_confirm.text
-    assert assistant.bulk_prepare_calls == [(["86534"], False)]
+    assert assistant.bulk_prepare_llm_run_calls == [(["86534"], False)]
 
     confirmed = client.post(
         "/bulk/prepare",
@@ -785,7 +909,10 @@ def test_catalog_bulk_prepare_shows_combined_confirm() -> None:
     )
     assert confirmed.status_code == 303
     assert confirmed.headers["location"] == "/"
-    assert assistant.bulk_prepare_calls == [(["86534"], False), (["86534"], True)]
+    assert assistant.bulk_prepare_llm_run_calls == [
+        (["86534"], False),
+        (["86534"], True),
+    ]
 
 
 def test_catalog_bulk_delete_uses_assistant_with_confirm() -> None:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -57,6 +60,8 @@ __all__ = [
     "EnrichmentConflictError",
     "EnrichmentError",
     "EnrichmentSessionView",
+    "LlmRunAlreadyInFlight",
+    "LlmRunStatus",
     "MatchAssessmentPage",
     "PlacementSuggestion",
     "PreparationPacketPage",
@@ -90,6 +95,14 @@ class DeleteNeedsConfirm(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class LlmRunAlreadyInFlight(Exception):
+    """At most one Assessment Summary LLM Run may be active."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 @dataclass(frozen=True)
@@ -130,6 +143,22 @@ class BulkPrepareResult:
     failed: list[tuple[str, str]]
     stopped: list[str]
     message: str | None = None
+
+
+@dataclass(frozen=True)
+class LlmRunStatus:
+    """Process-local Assessment Summary LLM Run activity (poll + Stop)."""
+
+    active: bool
+    phase: Literal["Judging", "Preparing"] | None = None
+    job_posting_id: str | None = None
+    title: str | None = None
+    employer: str | None = None
+    current_index: int | None = None
+    total: int | None = None
+    stop_requested: bool = False
+    message: str | None = None
+    bulk_prepare_result: BulkPrepareResult | None = None
 
 
 @dataclass(frozen=True)
@@ -215,12 +244,12 @@ class AssessmentSummaryCatalogRow:
 
 @dataclass(frozen=True)
 class AssessmentSummaryCatalog:
-    """Catalog page payload: rows, Pending rejudge progress, LLM Unavailable."""
+    """Catalog page payload: rows, Pending count, LLM Unavailable (no judge batch)."""
 
     rows: list[AssessmentSummaryCatalogRow]
-    processed_this_load: int
     pending_remaining: int
     llm_unavailable_reason: str | None
+    llm_run: LlmRunStatus
 
 
 @dataclass(frozen=True)
@@ -255,8 +284,24 @@ class _EnrichmentSession:
             self.dimension_answers = {}
 
 
-# Assessment Summary GET / may process this many Pending heads per catalog load.
-_CATALOG_REJUDGE_BUDGET = 5
+# Catalog assess LLM Run attempts at most this many Pending heads per start.
+_CATALOG_ASSESS_LLM_RUN_BUDGET = 5
+
+
+@dataclass
+class _LlmRunState:
+    """Mutable process-local LLM Run fields guarded by Assistant._llm_run_lock."""
+
+    active: bool = False
+    phase: Literal["Judging", "Preparing"] | None = None
+    job_posting_id: str | None = None
+    title: str | None = None
+    employer: str | None = None
+    current_index: int | None = None
+    total: int | None = None
+    stop_requested: bool = False
+    message: str | None = None
+    bulk_prepare_result: BulkPrepareResult | None = None
 
 
 class Assistant:
@@ -295,6 +340,10 @@ class Assistant:
         self._packet_store = PacketStore(store_root)
         self._pdf_renderer: PdfRenderer = pdf_renderer or RenderCvPdfRenderer()
         self._enrichment: _EnrichmentSession | None = None
+        self._llm_run_lock = threading.Lock()
+        self._llm_run_thread: threading.Thread | None = None
+        self._llm_run_stop = threading.Event()
+        self._llm_run_state = _LlmRunState()
 
     def list_assessment_summaries(
         self,
@@ -315,13 +364,12 @@ class Assistant:
         include_closed: bool = False,
         include_passed_deadlines: bool = False,
     ) -> AssessmentSummaryCatalog:
-        """Load Assessment Summary catalog: one refresh, up to five Pending rejudges, rows + progress.
+        """Load Assessment Summary catalog: refresh + rows only (no Pending judge batch).
 
-        Intended for GET / only. Match Assessment detail must not call this (no queue advance).
-        On LLM Unavailable for an attempt, stop further attempts for this load (early-stop).
+        Intended for GET / only. Catalog assess is an explicit LLM Run
+        (``start_catalog_assess_llm_run``). Match Assessment detail must not call this.
         """
         self._refresh_candidate_file_state()
-        processed = self._rejudge_pending_after_refresh(budget=_CATALOG_REJUDGE_BUDGET)
         summaries = self._list_assessment_summaries_after_refresh(
             include_closed=include_closed,
             include_passed_deadlines=include_passed_deadlines,
@@ -336,10 +384,274 @@ class Assistant:
         ]
         return AssessmentSummaryCatalog(
             rows=rows,
-            processed_this_load=processed,
             pending_remaining=pending_remaining,
             llm_unavailable_reason=self.get_llm_unavailable_reason(),
+            llm_run=self.get_llm_run_status(),
         )
+
+    def get_llm_run_status(self) -> LlmRunStatus:
+        """Return process-local Assessment Summary LLM Run status for poll UI."""
+        with self._llm_run_lock:
+            state = self._llm_run_state
+            return LlmRunStatus(
+                active=state.active,
+                phase=state.phase,
+                job_posting_id=state.job_posting_id,
+                title=state.title,
+                employer=state.employer,
+                current_index=state.current_index,
+                total=state.total,
+                stop_requested=state.stop_requested,
+                message=state.message,
+                bulk_prepare_result=state.bulk_prepare_result,
+            )
+
+    def stop_llm_run(self) -> LlmRunStatus:
+        """Request cooperative abort of the in-flight LLM Run (finish current posting)."""
+        with self._llm_run_lock:
+            if self._llm_run_state.active:
+                self._llm_run_stop.set()
+                self._llm_run_state.stop_requested = True
+        return self.get_llm_run_status()
+
+    def start_catalog_assess_llm_run(self) -> LlmRunStatus:
+        """Start an explicit catalog assess LLM Run (up to five Pending attempts).
+
+        Sequential; early-stop on LLM Unavailable; deferred/failed heads do not starve
+        later Pending ids. Raises ``LlmRunAlreadyInFlight`` when a run is active.
+        """
+        self._refresh_candidate_file_state()
+        pending_count = len(self._catalog_store.list_pending_job_posting_ids())
+        planned = min(_CATALOG_ASSESS_LLM_RUN_BUDGET, pending_count)
+        with self._llm_run_lock:
+            if self._llm_run_state.active:
+                phase = self._llm_run_state.phase or "Judging"
+                raise LlmRunAlreadyInFlight(
+                    f"Already {phase.lower()}… stop or wait for the current LLM Run."
+                )
+            self._llm_run_stop.clear()
+            self._llm_run_state = _LlmRunState(
+                active=True,
+                phase="Judging",
+                current_index=None,
+                total=planned or None,
+                message=None,
+            )
+            thread = threading.Thread(
+                target=self._run_catalog_assess_llm_run,
+                kwargs={"planned_total": planned},
+                name="catalog-assess-llm-run",
+                daemon=True,
+            )
+            self._llm_run_thread = thread
+            thread.start()
+        return self.get_llm_run_status()
+
+    def start_bulk_prepare_llm_run(
+        self,
+        job_posting_ids: list[str],
+        *,
+        confirm: bool = False,
+    ) -> LlmRunStatus:
+        """Start Bulk Prepare as an Assessment Summary LLM Run (uncapped).
+
+        Confirm / skip / Unavailable / continue-on-other-failure rules match
+        ``bulk_prepare``. Raises ``BulkPrepareNeedsConfirm`` before starting when
+        needed. Raises ``LlmRunAlreadyInFlight`` when a run is active.
+        """
+        selected = list(job_posting_ids)
+        if not selected:
+            with self._llm_run_lock:
+                self._llm_run_state = _LlmRunState(
+                    active=False,
+                    message="No Job Postings selected for Bulk Prepare.",
+                    bulk_prepare_result=BulkPrepareResult(
+                        prepared=[],
+                        skipped=[],
+                        failed=[],
+                        stopped=[],
+                        message="No Job Postings selected for Bulk Prepare.",
+                    ),
+                )
+            return self.get_llm_run_status()
+
+        self._refresh_candidate_file_state()
+        eligible: list[str] = []
+        skipped: list[str] = []
+        for job_id in selected:
+            if self.can_prepare(job_id):
+                eligible.append(job_id)
+            else:
+                skipped.append(job_id)
+
+        if not confirm:
+            confirm_items = self._bulk_prepare_confirm_items(eligible)
+            if confirm_items:
+                raise BulkPrepareNeedsConfirm(
+                    confirm_items,
+                    selected_ids=selected,
+                    eligible_ids=eligible,
+                    skipped_ids=skipped,
+                )
+
+        with self._llm_run_lock:
+            if self._llm_run_state.active:
+                phase = self._llm_run_state.phase or "Preparing"
+                raise LlmRunAlreadyInFlight(
+                    f"Already {phase.lower()}… stop or wait for the current LLM Run."
+                )
+            self._llm_run_stop.clear()
+            self._llm_run_state = _LlmRunState(
+                active=True,
+                phase="Preparing",
+                current_index=None,
+                total=len(eligible) or None,
+                message=None,
+            )
+            thread = threading.Thread(
+                target=self._run_bulk_prepare_llm_run,
+                kwargs={
+                    "eligible": list(eligible),
+                    "skipped": list(skipped),
+                },
+                name="bulk-prepare-llm-run",
+                daemon=True,
+            )
+            self._llm_run_thread = thread
+            thread.start()
+        return self.get_llm_run_status()
+
+    def _run_catalog_assess_llm_run(self, *, planned_total: int) -> None:
+        processed = 0
+        budget = _CATALOG_ASSESS_LLM_RUN_BUDGET
+        try:
+            for _ in range(budget):
+                if self._llm_run_stop.is_set():
+                    break
+
+                def _announce(job_id: str, *, _processed: int = processed) -> None:
+                    self._set_llm_run_current(
+                        phase="Judging",
+                        job_posting_id=job_id,
+                        current_index=_processed + 1,
+                        total=max(planned_total, _processed + 1),
+                    )
+
+                outcome = self._rejudge_one_pending_after_refresh(on_selected=_announce)
+                if outcome is None:
+                    break
+                processed += 1
+                if outcome == "llm_failed":
+                    break
+            if self._llm_run_stop.is_set():
+                message = (
+                    f"Stopped after {processed} Pending "
+                    f"{'attempt' if processed == 1 else 'attempts'}."
+                )
+            elif processed == 0:
+                message = "No Pending Job Postings to assess."
+            else:
+                remaining = len(self._catalog_store.list_pending_job_posting_ids())
+                message = (
+                    f"Assessed {processed} Pending "
+                    f"{'attempt' if processed == 1 else 'attempts'}; "
+                    f"{remaining} still Pending."
+                )
+            self._finish_llm_run(message=message)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._finish_llm_run(message=f"LLM Run failed: {exc}")
+
+    def _run_bulk_prepare_llm_run(
+        self, *, eligible: list[str], skipped: list[str]
+    ) -> None:
+        prepared: list[str] = []
+        failed: list[tuple[str, str]] = []
+        stopped: list[str] = []
+        try:
+            for index, job_id in enumerate(eligible):
+                if self._llm_run_stop.is_set():
+                    stopped.extend(eligible[index:])
+                    break
+                self._set_llm_run_current(
+                    phase="Preparing",
+                    job_posting_id=job_id,
+                    current_index=index + 1,
+                    total=len(eligible),
+                )
+                try:
+                    self.prepare(
+                        job_id,
+                        confirm_hard_constraint_fail=True,
+                        confirm_overwrite=True,
+                    )
+                except PrepareFailedError as exc:
+                    if self._is_llm_unavailable_prepare_failure(exc):
+                        failed.append((job_id, str(exc)))
+                        stopped.extend(eligible[index + 1 :])
+                        break
+                    failed.append((job_id, str(exc)))
+                    continue
+                prepared.append(job_id)
+            result = BulkPrepareResult(
+                prepared=prepared,
+                skipped=skipped,
+                failed=failed,
+                stopped=stopped,
+            )
+            message = (
+                f"Bulk Prepare: prepared {len(prepared)}; "
+                f"skipped {len(skipped)}; failed {len(failed)}; "
+                f"stopped {len(stopped)}."
+            )
+            if self._llm_run_stop.is_set() and not failed:
+                message = (
+                    f"Stopped Bulk Prepare after {len(prepared)} prepared; "
+                    f"{len(stopped)} not started."
+                )
+            self._finish_llm_run(message=message, bulk_prepare_result=result)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._finish_llm_run(message=f"LLM Run failed: {exc}")
+
+    def _set_llm_run_current(
+        self,
+        *,
+        phase: Literal["Judging", "Preparing"],
+        job_posting_id: str,
+        current_index: int,
+        total: int,
+    ) -> None:
+        posting = self._catalog_store.get_job_posting(job_posting_id)
+        with self._llm_run_lock:
+            self._llm_run_state.phase = phase
+            self._llm_run_state.job_posting_id = job_posting_id
+            self._llm_run_state.title = (
+                posting.title if posting is not None else job_posting_id
+            )
+            self._llm_run_state.employer = (
+                posting.employer if posting is not None else ""
+            )
+            self._llm_run_state.current_index = current_index
+            self._llm_run_state.total = total
+
+    def _finish_llm_run(
+        self,
+        *,
+        message: str | None,
+        bulk_prepare_result: BulkPrepareResult | None = None,
+    ) -> None:
+        with self._llm_run_lock:
+            self._llm_run_state.active = False
+            self._llm_run_state.phase = None
+            self._llm_run_state.job_posting_id = None
+            self._llm_run_state.title = None
+            self._llm_run_state.employer = None
+            self._llm_run_state.current_index = None
+            self._llm_run_state.total = None
+            self._llm_run_state.message = message
+            self._llm_run_state.bulk_prepare_result = bulk_prepare_result
+            # Keep stop_requested visible briefly only while active; clear when done.
+            self._llm_run_state.stop_requested = False
+            self._llm_run_thread = None
 
     def can_prepare(self, job_posting_id: str) -> bool:
         """Prepare is unavailable only while Pending (Hard Constraint fail does not block)."""
@@ -355,8 +667,8 @@ class Assistant:
     ) -> MatchAssessmentPage | None:
         """Load Match Assessment detail page (no opportunistic rejudge).
 
-        Returns None when the Job Posting is unknown. Catalog load remains the
-        batch rejudge entry for Assessment Summary.
+        Returns None when the Job Posting is unknown. Catalog assess is an
+        explicit LLM Run on Assessment Summary, not this page.
         """
         self._refresh_candidate_file_state()
         summary: AssessmentSummary | None = None
@@ -538,62 +850,33 @@ class Assistant:
 
         Skips Pending / not-ready rows. Raises BulkPrepareNeedsConfirm when any
         eligible posting needs Hard Constraint fail or overwrite confirm, unless
-        ``confirm`` is True. Runs sequentially; stops remaining on LLM Unavailable;
-        continues after other Prepare failures.
+        ``confirm`` is True. Runs as an LLM Run (waits for completion); stops
+        remaining on LLM Unavailable; continues after other Prepare failures.
         """
-        selected = list(job_posting_ids)
-        if not selected:
-            return BulkPrepareResult(
+        status = self.start_bulk_prepare_llm_run(
+            job_posting_ids, confirm=confirm
+        )
+        if not status.active:
+            return status.bulk_prepare_result or BulkPrepareResult(
                 prepared=[],
                 skipped=[],
                 failed=[],
                 stopped=[],
-                message="No Job Postings selected for Bulk Prepare.",
+                message=status.message,
             )
-
-        self._refresh_candidate_file_state()
-        eligible: list[str] = []
-        skipped: list[str] = []
-        for job_id in selected:
-            if self.can_prepare(job_id):
-                eligible.append(job_id)
-            else:
-                skipped.append(job_id)
-
-        if not confirm:
-            confirm_items = self._bulk_prepare_confirm_items(eligible)
-            if confirm_items:
-                raise BulkPrepareNeedsConfirm(
-                    confirm_items,
-                    selected_ids=selected,
-                    eligible_ids=eligible,
-                    skipped_ids=skipped,
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            status = self.get_llm_run_status()
+            if not status.active:
+                return status.bulk_prepare_result or BulkPrepareResult(
+                    prepared=[],
+                    skipped=[],
+                    failed=[],
+                    stopped=[],
+                    message=status.message,
                 )
-
-        prepared: list[str] = []
-        failed: list[tuple[str, str]] = []
-        stopped: list[str] = []
-        for index, job_id in enumerate(eligible):
-            try:
-                self.prepare(
-                    job_id,
-                    confirm_hard_constraint_fail=True,
-                    confirm_overwrite=True,
-                )
-            except PrepareFailedError as exc:
-                if self._is_llm_unavailable_prepare_failure(exc):
-                    failed.append((job_id, str(exc)))
-                    stopped.extend(eligible[index + 1 :])
-                    break
-                failed.append((job_id, str(exc)))
-                continue
-            prepared.append(job_id)
-        return BulkPrepareResult(
-            prepared=prepared,
-            skipped=skipped,
-            failed=failed,
-            stopped=stopped,
-        )
+            time.sleep(0.01)
+        raise PrepareFailedError("Bulk Prepare LLM Run timed out.")
 
     def _bulk_prepare_confirm_items(
         self, eligible_ids: list[str]
@@ -1089,7 +1372,7 @@ class Assistant:
         Pending ids can still advance; after a full pass the deferred heads are retried.
 
         Returns 1 if a Pending posting was processed (budget used), else 0.
-        Prefer ``load_assessment_summary_catalog`` for the Assessment Summary page.
+        Assessment Summary catalog assess uses ``start_catalog_assess_llm_run`` instead.
         """
         self._refresh_candidate_file_state()
         return self._rejudge_pending_after_refresh(budget=1)
@@ -1112,6 +1395,8 @@ class Assistant:
 
     def _rejudge_one_pending_after_refresh(
         self,
+        *,
+        on_selected: Callable[[str], None] | None = None,
     ) -> Literal["saved", "skipped", "llm_failed"] | None:
         pending = self._catalog_store.list_pending_job_posting_ids()
         if not pending:
@@ -1123,6 +1408,8 @@ class Assistant:
             self._rejudge_skip_ids.clear()
             candidates = list(pending)
         job_id = candidates[0]
+        if on_selected is not None:
+            on_selected(job_id)
         outcome = self._assess_job_posting(job_id)
         if outcome == "saved":
             self._llm_call_error = None

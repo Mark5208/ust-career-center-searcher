@@ -8,7 +8,7 @@ from typing import Protocol
 
 import uvicorn
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from job_finding_assistant.assistant import (
@@ -25,6 +25,8 @@ from job_finding_assistant.assistant import (
     EnrichmentConflictError,
     EnrichmentError,
     EnrichmentSessionView,
+    LlmRunAlreadyInFlight,
+    LlmRunStatus,
     MatchAssessmentPage,
     PreparationPacketPage,
     PrepareBlockedError,
@@ -47,7 +49,7 @@ class SupportsAssistantUi(Protocol):
         include_closed: bool = False,
         include_passed_deadlines: bool = False,
     ) -> AssessmentSummaryCatalog:
-        """Load Assessment Summary catalog (rejudge + rows + progress) for GET /."""
+        """Load Assessment Summary catalog (rows only; no judge batch) for GET /."""
 
     def load_match_assessment_page(
         self, job_posting_id: str
@@ -80,7 +82,21 @@ class SupportsAssistantUi(Protocol):
     def bulk_prepare(
         self, job_posting_ids: list[str], *, confirm: bool = False
     ) -> BulkPrepareResult:
-        """Bulk Prepare selected Assessment Summary rows."""
+        """Bulk Prepare selected Assessment Summary rows (sync helper)."""
+
+    def start_bulk_prepare_llm_run(
+        self, job_posting_ids: list[str], *, confirm: bool = False
+    ) -> LlmRunStatus:
+        """Start Bulk Prepare as an Assessment Summary LLM Run."""
+
+    def start_catalog_assess_llm_run(self) -> LlmRunStatus:
+        """Start an explicit catalog assess LLM Run."""
+
+    def get_llm_run_status(self) -> LlmRunStatus:
+        """Return process-local LLM Run status for poll UI."""
+
+    def stop_llm_run(self) -> LlmRunStatus:
+        """Request cooperative abort of the in-flight LLM Run."""
 
     def bulk_delete(
         self, job_posting_ids: list[str], *, confirm: bool = False
@@ -164,22 +180,24 @@ def _parse_optional_date(raw: str) -> date | None:
     return date.fromisoformat(text)
 
 
-def _format_bulk_prepare_message(result: BulkPrepareResult) -> str:
-    if result.message:
-        return result.message
-    parts = [
-        f"Prepared {len(result.prepared)}",
-        f"skipped {len(result.skipped)}",
-        f"failed {len(result.failed)}",
-        f"stopped {len(result.stopped)}",
-    ]
-    return "Bulk Prepare: " + "; ".join(parts) + "."
-
-
 def _format_bulk_delete_message(result: BulkDeleteResult) -> str:
     if result.message:
         return result.message
     return f"Bulk Delete: removed {len(result.deleted)}."
+
+
+def _llm_run_status_payload(status: LlmRunStatus) -> dict[str, object]:
+    return {
+        "active": status.active,
+        "phase": status.phase,
+        "job_posting_id": status.job_posting_id,
+        "title": status.title,
+        "employer": status.employer,
+        "current_index": status.current_index,
+        "total": status.total,
+        "stop_requested": status.stop_requested,
+        "message": status.message,
+    }
 
 
 def create_app(assistant: SupportsAssistantUi) -> FastAPI:
@@ -206,6 +224,7 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
         )
         bulk_message = request.app.state.bulk_message
         request.app.state.bulk_message = None
+        llm_run = catalog.llm_run
         return _TEMPLATES.TemplateResponse(
             request,
             "assessment_summaries.html",
@@ -216,10 +235,35 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
                 "prepare_error": request.app.state.prepare_error,
                 "bulk_message": bulk_message,
                 "llm_unavailable_reason": catalog.llm_unavailable_reason,
-                "processed_this_load": catalog.processed_this_load,
                 "pending_remaining": catalog.pending_remaining,
+                "llm_run": llm_run,
             },
         )
+
+    @app.post("/llm-run/assess")
+    def start_catalog_assess_llm_run(request: Request) -> Response:
+        current = request.app.state.assistant
+        try:
+            current.start_catalog_assess_llm_run()
+        except LlmRunAlreadyInFlight as exc:
+            request.app.state.bulk_message = exc.message
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.get("/llm-run/status")
+    def llm_run_status(request: Request) -> JSONResponse:
+        current = request.app.state.assistant
+        return JSONResponse(_llm_run_status_payload(current.get_llm_run_status()))
+
+    @app.post("/llm-run/stop")
+    def stop_llm_run(request: Request) -> Response:
+        current = request.app.state.assistant
+        current.stop_llm_run()
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            return JSONResponse(
+                _llm_run_status_payload(current.get_llm_run_status())
+            )
+        return RedirectResponse(url="/", status_code=303)
 
     @app.get("/jobs/{job_posting_id}", response_class=HTMLResponse)
     def match_assessment_detail_page(
@@ -312,7 +356,7 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
         current = request.app.state.assistant
         request.app.state.prepare_error = None
         try:
-            result = current.bulk_prepare(
+            status = current.start_bulk_prepare_llm_run(
                 job_posting_ids, confirm=confirm == "1"
             )
         except BulkPrepareNeedsConfirm as exc:
@@ -326,7 +370,11 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
                 },
                 status_code=200,
             )
-        request.app.state.bulk_message = _format_bulk_prepare_message(result)
+        except LlmRunAlreadyInFlight as exc:
+            request.app.state.bulk_message = exc.message
+            return RedirectResponse(url="/", status_code=303)
+        if not status.active and status.message:
+            request.app.state.bulk_message = status.message
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/bulk/delete")
