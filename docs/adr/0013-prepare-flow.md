@@ -29,6 +29,19 @@ Match Assessment is **not** frozen into the packet; viewing the packet shows the
 
 If tailor artifacts succeed but PDF rendering fails: keep YAML + Gap Report + Edit Summary, surface that the PDF is missing; do not discard the whole prepare.
 
+### Tailored YAML validation against RenderCV's schema (revisited 2026-08-12)
+
+Before ever invoking the PDF renderer, Prepare validates the Tailored YAML against RenderCV's own schema (`rendercv.schema.rendercv_model_builder.build_rendercv_dictionary_and_model`) — not a hand-rolled parser. This is a distinct step from PDF rendering; the `PdfRenderer` port stays render-only.
+
+- On the **first** validation failure, Prepare calls the tailor **once more** with the same inputs plus the prior attempt's formatted validation errors, asking for a corrected full Tailored YAML (Gap Report, Edit Summary, and Tailored YAML together — one retry, not a YAML-only patch).
+- Whichever attempt is ultimately kept (the retry if it validates, otherwise the retry's own failed attempt) supplies Gap Report + Edit Summary + Tailored YAML together — never mixed across attempts.
+- A Tailored YAML still invalid after the retry follows the **same PDF-only-failure carve-out above**, not a full Prepare failure: keep Gap Report + Edit Summary + Tailored YAML, mark the PDF missing.
+- The missing-PDF reason is no longer discarded: the Preparation Packet carries the reason lines (one per schema validation problem, or the renderer's own failure message when the renderer itself is unavailable/times out/etc.) instead of a bare "PDF missing" with no detail.
+- This applies uniformly everywhere Prepare runs a posting, including per-posting inside Bulk Prepare's LLM Run loop — accepted as a bounded extra tailor call per failing posting.
+- Scope: Tailored CV / Prepare time only. Master CV / Candidate Snapshot parsing (`candidate_snapshot.py`) keeps its existing lenient parser; swapping that to RenderCV's real schema is a separate future decision (it would change ADR-0014's Pending/invalid-Master-CV behavior).
+
+**Considered options:** folding validation into `RenderCvPdfRenderer.render_pdf` itself (rejected — keeps the renderer render-only and validation reusable/testable on its own); treating a schema-invalid Tailored YAML as a full Prepare failure with no packet (rejected — a hand-fixable YAML the user can still download is more useful than nothing, matching the existing PDF-only-failure spirit); zero retries (rejected — an obvious, bounded self-correction pass catches common LLM structural mistakes before giving up) and unlimited/multi-retry (rejected — one retry bounds added latency/cost per posting, including across a Bulk Prepare batch); a dedicated `LlmCvTailor.repair()` port method (rejected — reusing `tailor()` with an optional prior-errors parameter keeps Fake and live tailors to one method shape); also replacing the Master CV/Candidate Snapshot parser with RenderCV's real schema in the same pass (deferred — that changes ADR-0014's Pending/invalid-Master-CV behavior and deserves its own decision).
+
 ## Stale
 
 A packet is Stale only when the **Master CV**, **Hard Constraints file**, or **Preferences file** changes after it was produced. “Change” includes **content** change and **path clear/unset** (fingerprint on the next check — see [0014-assessment-freshness-and-change-detection.md](0014-assessment-freshness-and-change-detection.md)). Crawl updates to Job Posting detail make the Match Assessment Pending for re-judge but do **not** auto-Stale or auto-regenerate the packet.

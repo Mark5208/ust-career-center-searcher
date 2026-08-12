@@ -45,6 +45,7 @@ class PacketStore:
         tailored_yaml: str,
         pdf_bytes: bytes | None,
         stale: bool = False,
+        pdf_missing_reasons: tuple[str, ...] = (),
     ) -> PreparationPacket:
         """Replace the packet for one Job Posting without leaving a half-packet.
 
@@ -70,7 +71,10 @@ class PacketStore:
             if pdf_bytes is not None:
                 (staging / "tailored.pdf").write_bytes(pdf_bytes)
             (staging / "meta.json").write_text(
-                json.dumps({"stale": stale}), encoding="utf-8"
+                json.dumps(
+                    {"stale": stale, "pdf_missing_reasons": list(pdf_missing_reasons)}
+                ),
+                encoding="utf-8",
             )
             if target.exists():
                 target.rename(backup)
@@ -90,13 +94,24 @@ class PacketStore:
             tailored_yaml=tailored_yaml,
             pdf_bytes=pdf_bytes,
             stale=stale,
+            pdf_missing_reasons=tuple(pdf_missing_reasons),
         )
 
-    def _read_stale_flag(self, packet_dir: Path) -> bool:
+    def _read_meta(self, packet_dir: Path) -> dict[str, object]:
         meta_path = packet_dir / "meta.json"
         if not meta_path.is_file():
-            return False
-        return bool(json.loads(meta_path.read_text(encoding="utf-8")).get("stale"))
+            return {}
+        loaded: object = json.loads(meta_path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _read_stale_flag(self, packet_dir: Path) -> bool:
+        return bool(self._read_meta(packet_dir).get("stale"))
+
+    def _read_pdf_missing_reasons(self, packet_dir: Path) -> tuple[str, ...]:
+        raw = self._read_meta(packet_dir).get("pdf_missing_reasons", ())
+        if not isinstance(raw, list):
+            return ()
+        return tuple(str(reason) for reason in raw)
 
     def get(self, job_posting_id: str) -> PreparationPacket | None:
         """Load one packet, or None when absent."""
@@ -120,6 +135,7 @@ class PacketStore:
             tailored_yaml=tailored_yaml,
             pdf_bytes=pdf_bytes,
             stale=self._read_stale_flag(packet_dir),
+            pdf_missing_reasons=self._read_pdf_missing_reasons(packet_dir),
         )
 
     def presence_flags(
@@ -141,12 +157,13 @@ class PacketStore:
         return flags
 
     def mark_stale(self, job_posting_id: str) -> None:
-        """Flag an existing packet as Stale without altering artifacts."""
+        """Flag an existing packet as Stale without altering other artifacts/meta."""
         packet_dir = self._packet_dir(job_posting_id)
         if not (packet_dir / "tailored.yaml").is_file():
             return
-        meta_path = packet_dir / "meta.json"
-        meta_path.write_text(json.dumps({"stale": True}), encoding="utf-8")
+        meta = self._read_meta(packet_dir)
+        meta["stale"] = True
+        (packet_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
     def mark_all_stale(self) -> None:
         """Flag every stored packet as Stale."""

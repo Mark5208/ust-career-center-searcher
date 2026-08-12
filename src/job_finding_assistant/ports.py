@@ -142,8 +142,14 @@ class LlmCvTailor(Protocol):
         relevance_evidence: list[EvidencePair],
         hard_constraint_outcome: ConstraintOutcome,
         hard_constraint_reason: str,
+        prior_attempt_errors: list[str] | None = None,
     ) -> TailorResult:
-        """Produce Gap Report, Tailored YAML, and Edit Summary for one Prepare."""
+        """Produce Gap Report, Tailored YAML, and Edit Summary for one Prepare.
+
+        ``prior_attempt_errors`` carries the prior attempt's formatted RenderCV
+        schema validation errors on Prepare's one bounded retry (ADR-0013); None
+        on a first attempt.
+        """
 
 
 @runtime_checkable

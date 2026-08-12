@@ -37,6 +37,16 @@ cv:
           - Built Python services
 """
 
+_INVALID_MISSING_POSITION_CV = """\
+cv:
+  name: Test Candidate
+  sections:
+    experience:
+      - company: Example
+        highlights:
+          - Built Python services
+"""
+
 
 def _write_cv(tmp_path: Path, name: str = "master_CV.yaml", body: str = _SAMPLE_CV) -> Path:
     path = tmp_path / name
@@ -282,6 +292,40 @@ def test_bulk_prepare_continues_after_non_llm_prepare_failure(tmp_path: Path) ->
     assert result.stopped == []
     assert tailor.tailor_calls == 1
     assert assistant.get_preparation_packet("86535") is not None
+
+
+def test_bulk_prepare_retries_tailor_once_per_posting_when_schema_invalid(
+    tmp_path: Path,
+) -> None:
+    """Tailored YAML validation retry (ADR-0013 revisit) applies per-posting inside
+    Bulk Prepare's LLM Run loop, not just single Prepare."""
+    invalid_result = TailorResult(
+        gap_report=GapReport(),
+        edit_summary=EditSummary(),
+        tailored_yaml=_INVALID_MISSING_POSITION_CV,
+    )
+    valid_result = TailorResult(
+        gap_report=GapReport(),
+        edit_summary=EditSummary(),
+        tailored_yaml=_SAMPLE_CV,
+    )
+    tailor = FakeLlmCvTailor(results=[invalid_result, valid_result])
+    assistant, tailor = _assistant(
+        tmp_path,
+        [_posting("86534", "System Engineer")],
+        llm_cv_tailor=tailor,
+    )
+
+    result = assistant.bulk_prepare(["86534"])
+
+    assert result.prepared == ["86534"]
+    assert result.failed == []
+    assert tailor.tailor_calls == 2
+    view = assistant.get_preparation_packet("86534")
+    assert view is not None
+    assert view.packet.pdf_missing is False
+    assert view.packet.pdf_missing_reasons == ()
+    assert view.packet.tailored_yaml == _SAMPLE_CV
 
 
 def test_bulk_delete_requires_confirm_listing_selection(tmp_path: Path) -> None:

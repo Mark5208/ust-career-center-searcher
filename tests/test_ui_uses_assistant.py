@@ -876,6 +876,45 @@ def test_catalog_bulk_prepare_and_packet_routes_use_assistant() -> None:
     assert pdf_resp.content.startswith(b"%PDF")
 
 
+def test_packet_page_shows_pdf_missing_reasons_instead_of_bare_missing() -> None:
+    """ADR-0013 revisit: a missing PDF carries short reason lines, not a bare notice."""
+    assistant = _RecordingAssistant()
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="pass",
+            preference="Strong",
+            relevance="Strong",
+            has_preparation_packet=True,
+        )
+    ]
+    packet = PreparationPacket(
+        job_posting_id="86534",
+        gap_report=GapReport(),
+        edit_summary=EditSummary(),
+        tailored_yaml="cv:\n  name: Tailored\n",
+        pdf_bytes=None,
+        pdf_missing_reasons=(
+            "cv.sections.experience.0.position: This field is required.",
+        ),
+    )
+    assistant.packet_views["86534"] = PreparationPacketView(
+        packet=packet, match_assessment=None
+    )
+    client = TestClient(create_app(assistant))
+
+    view = client.get("/jobs/86534/packet")
+
+    assert view.status_code == 200
+    assert "This field is required" in view.text
+    assert "Download Tailored PDF" not in view.text
+
+
 def test_catalog_bulk_prepare_shows_combined_confirm() -> None:
     assistant = _RecordingAssistant()
     assistant.bulk_prepare_needs_confirm = True
