@@ -351,14 +351,25 @@ class FakeLlmCvTailor:
         *,
         available: bool = True,
         result: TailorResult | None = None,
+        results: list[TailorResult] | None = None,
         fail_on_call: bool = False,
     ) -> None:
         self._available = available
-        self._result = result or TailorResult(
-            gap_report=GapReport(),
-            edit_summary=EditSummary(),
-            tailored_yaml="cv:\n  name: Tailored\n  sections: {}\n",
-        )
+        # A scripted `results=` sequence is a strict contract (fails loudly if
+        # over-called, e.g. Prepare's one bounded retry regressing to unbounded);
+        # a single `result=` is a convenience that repeats for any call count.
+        self._strict_sequence = results is not None
+        if results is not None:
+            self._results = list(results)
+        else:
+            self._results = [
+                result
+                or TailorResult(
+                    gap_report=GapReport(),
+                    edit_summary=EditSummary(),
+                    tailored_yaml="cv:\n  name: Tailored\n  sections: {}\n",
+                )
+            ]
         self._fail_on_call = fail_on_call
         self.tailor_calls = 0
         self.tailor_inputs: list[dict[str, object]] = []
@@ -380,12 +391,17 @@ class FakeLlmCvTailor:
         relevance_evidence: list[EvidencePair],
         hard_constraint_outcome: ConstraintOutcome,
         hard_constraint_reason: str,
+        prior_attempt_errors: list[str] | None = None,
     ) -> TailorResult:
         if not self._available or self._fail_on_call:
             if not self._available:
                 raise LlmUnavailableError("Fake tailor disabled")
             raise LlmUnavailableError("Fake tailor failed")
-        self.tailor_calls += 1
+        if self._strict_sequence and self.tailor_calls >= len(self._results):
+            raise AssertionError(
+                f"FakeLlmCvTailor.tailor() called {self.tailor_calls + 1} times but "
+                f"only {len(self._results)} results were scripted via results="
+            )
         self.tailor_inputs.append(
             {
                 "master_cv_yaml": master_cv_yaml,
@@ -394,9 +410,14 @@ class FakeLlmCvTailor:
                 "relevance_evidence": list(relevance_evidence),
                 "hard_constraint_outcome": hard_constraint_outcome,
                 "hard_constraint_reason": hard_constraint_reason,
+                "prior_attempt_errors": (
+                    list(prior_attempt_errors) if prior_attempt_errors else None
+                ),
             }
         )
-        return self._result
+        index = min(self.tailor_calls, len(self._results) - 1)
+        self.tailor_calls += 1
+        return self._results[index]
 
 
 class FakeLlmCvEnricher:

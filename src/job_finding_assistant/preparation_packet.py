@@ -85,6 +85,7 @@ class PreparationPacket:
     tailored_yaml: str
     pdf_bytes: bytes | None
     stale: bool = False
+    pdf_missing_reasons: tuple[str, ...] = ()
 
     @property
     def pdf_missing(self) -> bool:

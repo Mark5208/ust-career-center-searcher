@@ -145,6 +145,7 @@ class UnavailableLlmCvTailor:
         relevance_evidence: list[EvidencePair],
         hard_constraint_outcome: ConstraintOutcome,
         hard_constraint_reason: str,
+        prior_attempt_errors: list[str] | None = None,
     ) -> TailorResult:
         del (
             master_cv_yaml,
@@ -153,6 +154,7 @@ class UnavailableLlmCvTailor:
             relevance_evidence,
             hard_constraint_outcome,
             hard_constraint_reason,
+            prior_attempt_errors,
         )
         raise LlmUnavailableError(self._reason)
 
@@ -567,12 +569,22 @@ class OpenAiCompatibleLlmCvTailor:
         relevance_evidence: list[EvidencePair],
         hard_constraint_outcome: ConstraintOutcome,
         hard_constraint_reason: str,
+        prior_attempt_errors: list[str] | None = None,
     ) -> TailorResult:
         try:
             evidence_lines = [
                 f"- job: {pair.job_excerpt} | candidate: {pair.candidate_excerpt} | role: {pair.role}"
                 for pair in relevance_evidence
             ]
+            retry_note = ""
+            if prior_attempt_errors:
+                errors_block = "\n".join(f"- {error}" for error in prior_attempt_errors)
+                retry_note = (
+                    "\nYour previous Tailored YAML failed RenderCV's schema with these "
+                    f"problems:\n{errors_block}\n"
+                    "Return a corrected full Gap Report, Edit Summary, and Tailored YAML "
+                    "together that fixes them — not a partial patch.\n"
+                )
             user = (
                 "Master CV YAML:\n"
                 f"{master_cv_yaml}\n\n"
@@ -584,6 +596,7 @@ class OpenAiCompatibleLlmCvTailor:
                 f"{chr(10).join(evidence_lines) if evidence_lines else '(none)'}\n\n"
                 f"Hard Constraint outcome: {hard_constraint_outcome}\n"
                 f"Hard Constraint reason: {hard_constraint_reason}\n"
+                f"{retry_note}"
             )
             data = self._client.complete_json(system=_TAILOR_SYSTEM, user=user)
             tailored_yaml = data.get("tailored_yaml")

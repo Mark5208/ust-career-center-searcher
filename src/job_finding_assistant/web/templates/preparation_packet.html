@@ -92,7 +92,16 @@
       </p>
       {% endif %}
       {% if packet.pdf_missing %}
-      <p class="banner">PDF is missing for this packet (YAML, Gap Report, and Edit Summary were kept).</p>
+      <div class="banner">
+        <p>PDF is missing for this packet (YAML, Gap Report, and Edit Summary were kept).</p>
+        {% if packet.pdf_missing_reasons %}
+        <ul>
+          {% for reason in packet.pdf_missing_reasons %}
+          <li>{{ reason }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
       {% endif %}
 
       <h2>Gap Report</h2>

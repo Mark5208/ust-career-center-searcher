@@ -100,6 +100,7 @@ Implemented through `Assistant.prepare` / `load_preparation_packet_page` (UI) / 
 - HC fail → confirm with reason; re-Prepare → overwrite confirm; otherwise one-click.
 - Success packet: Gap Report + Edit Summary + Tailored YAML + PDF at Prepare; assessment not frozen-copied.
 - PDF-only failure may leave packet without PDF; tailor/LLM mid-run failure is atomic (prior packet untouched).
+- **Tailored YAML validation against RenderCV's schema** (`rendercv_validation.py`, parent #24): before ever rendering, `prepare` validates Tailored YAML against RenderCV's own schema (not a hand-rolled parser), on the metadata-stripped view the renderer also uses. On the first schema failure, one bounded retry: `LlmCvTailor.tailor(..., prior_attempt_errors=...)` with the formatted errors, requesting a corrected Gap Report + Edit Summary + Tailored YAML together. A still-invalid retry follows the same PDF-only-failure carve-out (packet kept, PDF missing) — never a full Prepare failure. `PreparationPacket.pdf_missing_reasons` carries one line per schema problem, or the renderer's own failure message for a generic `PdfRenderError` (no longer discarded). Applies uniformly inside Bulk Prepare's per-posting loop.
 - Stale only when Master CV / HC file / Preferences file change; Stale packets stay readable with banner; Crawl detail does not Stale.
 - Tool-managed packet store (keyed by Job Posting); download PDF/YAML; Gap Report / Edit Summary UI-only in v1.
 - Delete confirms then hard-removes posting + assessment + packet (no trash/undo).

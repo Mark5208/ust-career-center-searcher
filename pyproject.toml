@@ -31,6 +31,10 @@ python_version = "3.12"
 strict = true
 packages = ["job_finding_assistant"]
 
+[[tool.mypy.overrides]]
+module = ["rendercv.*"]
+ignore_missing_imports = true
+
 [project.scripts]
 job-finding-assistant = "job_finding_assistant.web.app:main"
 

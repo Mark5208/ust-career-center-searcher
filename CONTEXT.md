@@ -141,7 +141,7 @@ _Avoid_: suggestions list, missing requirements (alone)
 ### CV artifacts
 
 **Preparation Packet**:
-The prepare-to-apply output for one Job Posting, held in a tool-managed store (not a user-chosen packets folder): Gap Report, Edit Summary, Tailored CV (RenderCV YAML), and PDF from RenderCV at Prepare; viewed with the current Match Assessment (not a frozen copy). UI for Gap Report and Edit Summary; download Tailored PDF and YAML. One current packet per posting; re-Prepare overwrites after confirm; mid-run failure leaves the prior packet untouched. Rules: ADR-0013.
+The prepare-to-apply output for one Job Posting, held in a tool-managed store (not a user-chosen packets folder): Gap Report, Edit Summary, Tailored CV (RenderCV YAML), and PDF from RenderCV at Prepare; viewed with the current Match Assessment (not a frozen copy). UI for Gap Report and Edit Summary; download Tailored PDF and YAML. One current packet per posting; re-Prepare overwrites after confirm; mid-run failure leaves the prior packet untouched. A missing PDF (Tailored YAML fails RenderCV's schema after one tailor retry, or the renderer itself fails) carries short reason lines instead of a bare "PDF missing." Rules: ADR-0013.
 _Avoid_: application pack, draft bundle, apply kit, packets folder
 
 **Tailored CV**:

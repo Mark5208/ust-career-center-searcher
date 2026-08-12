@@ -38,6 +38,26 @@ cv:
           - Built Python services
 """
 
+_INVALID_MISSING_POSITION_CV = """\
+cv:
+  name: Test Candidate
+  sections:
+    experience:
+      - company: Example
+        highlights:
+          - Built Python services
+"""
+
+_INVALID_MISSING_COMPANY_CV = """\
+cv:
+  name: Test Candidate
+  sections:
+    experience:
+      - position: Platform engineer
+        highlights:
+          - Built Python services
+"""
+
 
 def _write_cv(tmp_path: Path, name: str = "master_CV.yaml", body: str = _SAMPLE_CV) -> Path:
     path = tmp_path / name
@@ -264,6 +284,80 @@ def test_pdf_only_failure_keeps_packet_without_pdf(tmp_path: Path) -> None:
     assert packet.tailored_yaml
     assert assistant.get_tailored_pdf("86534") is None
     assert assistant.list_assessment_summaries()[0].has_preparation_packet is True
+    # Renderer's own failure message is surfaced, not discarded (ADR-0013 revisit).
+    assert packet.pdf_missing_reasons == ("FakePdfRenderer failed",)
+
+
+def test_prepare_retries_tailor_once_when_schema_invalid_then_succeeds(
+    tmp_path: Path,
+) -> None:
+    invalid_result = TailorResult(
+        gap_report=GapReport(
+            items=(
+                GapItem(
+                    requirement="Kubernetes",
+                    status="missing",
+                    evidence="not found",
+                    suggestion="Learn K8s basics",
+                ),
+            )
+        ),
+        edit_summary=EditSummary(),
+        tailored_yaml=_INVALID_MISSING_POSITION_CV,
+    )
+    valid_result = TailorResult(
+        gap_report=invalid_result.gap_report,
+        edit_summary=EditSummary(),
+        tailored_yaml=_SAMPLE_CV,
+    )
+    tailor = FakeLlmCvTailor(results=[invalid_result, valid_result])
+    assistant, tailor, renderer, _ = _ready_assistant(tmp_path, llm_cv_tailor=tailor)
+
+    packet = assistant.prepare("86534")
+
+    assert tailor.tailor_calls == 2
+    assert renderer.render_calls == 1
+    assert packet.pdf_missing is False
+    assert packet.pdf_bytes == b"%PDF-1.4 fake"
+    assert packet.pdf_missing_reasons == ()
+    assert packet.tailored_yaml == _SAMPLE_CV
+    assert packet.gap_report.items  # kept from the retry, not mixed with attempt 1
+    first_call_inputs = tailor.tailor_inputs[0]
+    retry_inputs = tailor.tailor_inputs[1]
+    assert first_call_inputs["prior_attempt_errors"] is None
+    assert retry_inputs["prior_attempt_errors"]
+    assert any("position" in error for error in retry_inputs["prior_attempt_errors"])
+
+
+def test_prepare_keeps_packet_without_pdf_when_retry_still_invalid(
+    tmp_path: Path,
+) -> None:
+    first_invalid = TailorResult(
+        gap_report=GapReport(),
+        edit_summary=EditSummary(),
+        tailored_yaml=_INVALID_MISSING_POSITION_CV,
+    )
+    retry_invalid = TailorResult(
+        gap_report=GapReport(),
+        edit_summary=EditSummary(),
+        tailored_yaml=_INVALID_MISSING_COMPANY_CV,
+    )
+    tailor = FakeLlmCvTailor(results=[first_invalid, retry_invalid])
+    assistant, tailor, renderer, _ = _ready_assistant(tmp_path, llm_cv_tailor=tailor)
+
+    packet = assistant.prepare("86534")
+
+    assert tailor.tailor_calls == 2
+    assert renderer.render_calls == 0  # never invoked once validation fails (AC2)
+    assert packet.pdf_missing is True
+    assert packet.pdf_bytes is None
+    # The retry's own attempt is kept whole (Gap Report + Edit Summary + YAML together).
+    assert packet.tailored_yaml == _INVALID_MISSING_COMPANY_CV
+    assert packet.pdf_missing_reasons
+    assert any("company" in reason for reason in packet.pdf_missing_reasons)
+    assert not any("position" in reason for reason in packet.pdf_missing_reasons)
+    assert assistant.list_assessment_summaries()[0].has_preparation_packet is True
+    assert assistant.get_tailored_pdf("86534") is None
 
 
 def test_master_cv_change_marks_packet_stale_but_readable(tmp_path: Path) -> None:

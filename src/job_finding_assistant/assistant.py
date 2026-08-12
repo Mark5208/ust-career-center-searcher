@@ -27,9 +27,14 @@ from job_finding_assistant.enrichment import (
 )
 from job_finding_assistant.job_board import AuthLostError, CrawlOutcome, JobListEntry
 from job_finding_assistant.llm_runtime import LlmUnavailableError
-from job_finding_assistant.match_assessment import MatchAssessment
+from job_finding_assistant.match_assessment import (
+    ConstraintOutcome,
+    EvidencePair,
+    MatchAssessment,
+)
 from job_finding_assistant.packet_store import PacketStore
 from job_finding_assistant.pdf_renderer import PdfRenderError, RenderCvPdfRenderer
+from job_finding_assistant.rendercv_validation import validate_tailored_yaml
 from job_finding_assistant.ports import (
     ConstraintFilesStore,
     JobBoardSession,
@@ -39,7 +44,7 @@ from job_finding_assistant.ports import (
     MasterCvStore,
     PdfRenderer,
 )
-from job_finding_assistant.preparation_packet import PreparationPacket
+from job_finding_assistant.preparation_packet import PreparationPacket, TailorResult
 
 
 __all__ = [
@@ -306,6 +311,10 @@ class Assistant:
     Adapters (Job Board, CatalogStore, LLM ports, Master CV, constraint files) stay
     behind this seam.
     """
+
+    # Prepare tries the tailor once, then once more on a schema-invalid Tailored
+    # YAML (ADR-0013 revisit) — never more.
+    _MAX_TAILOR_ATTEMPTS = 2
 
     def __init__(
         self,
@@ -754,25 +763,36 @@ class Assistant:
         if posting is None or not posting.has_detail():
             raise PrepareFailedError("Job Posting detail is missing")
 
-        try:
-            tailor_result = self._llm_cv_tailor.tailor(
+        # First attempt, plus one bounded retry with the prior attempt's formatted
+        # schema errors if it was invalid (never more than one retry — ADR-0013
+        # revisit); each attempt's Gap Report + Edit Summary + YAML travel together.
+        prior_errors: list[str] | None = None
+        for _ in range(self._MAX_TAILOR_ATTEMPTS):
+            tailor_result = self._tailor_once(
                 master_cv_yaml=master_cv_yaml,
                 candidate_snapshot=snapshot,
                 job_detail_fields=posting.fields_for_llm(),
                 relevance_evidence=list(assessment.evidence),
                 hard_constraint_outcome=assessment.hard_constraint_outcome,
                 hard_constraint_reason=assessment.hard_constraint_reason,
+                prior_attempt_errors=prior_errors,
             )
-        except LlmUnavailableError as exc:
-            self._llm_call_error = exc.reason
-            raise PrepareFailedError(exc.reason) from exc
-        self._llm_call_error = None
+            validation = validate_tailored_yaml(tailor_result.tailored_yaml)
+            if validation.valid:
+                break
+            prior_errors = list(validation.errors)
 
-        pdf_bytes: bytes | None
-        try:
-            pdf_bytes = self._pdf_renderer.render_pdf(tailor_result.tailored_yaml)
-        except PdfRenderError:
-            pdf_bytes = None
+        pdf_bytes: bytes | None = None
+        pdf_missing_reasons: tuple[str, ...] = ()
+        if validation.valid:
+            try:
+                pdf_bytes = self._pdf_renderer.render_pdf(tailor_result.tailored_yaml)
+            except PdfRenderError as exc:
+                pdf_missing_reasons = (str(exc),)
+        else:
+            # Same PDF-only-failure carve-out as a renderer failure: keep the
+            # packet, mark the PDF missing with one reason line per schema problem.
+            pdf_missing_reasons = validation.errors
 
         return self._packet_store.save(
             job_posting_id,
@@ -780,8 +800,37 @@ class Assistant:
             edit_summary=tailor_result.edit_summary,
             tailored_yaml=tailor_result.tailored_yaml,
             pdf_bytes=pdf_bytes,
+            pdf_missing_reasons=pdf_missing_reasons,
             stale=False,
         )
+
+    def _tailor_once(
+        self,
+        *,
+        master_cv_yaml: str,
+        candidate_snapshot: CandidateSnapshot,
+        job_detail_fields: dict[str, str],
+        relevance_evidence: list[EvidencePair],
+        hard_constraint_outcome: ConstraintOutcome,
+        hard_constraint_reason: str,
+        prior_attempt_errors: list[str] | None = None,
+    ) -> TailorResult:
+        """Call the tailor once; map LLM Unavailable to an atomic PrepareFailedError."""
+        try:
+            result = self._llm_cv_tailor.tailor(
+                master_cv_yaml=master_cv_yaml,
+                candidate_snapshot=candidate_snapshot,
+                job_detail_fields=job_detail_fields,
+                relevance_evidence=relevance_evidence,
+                hard_constraint_outcome=hard_constraint_outcome,
+                hard_constraint_reason=hard_constraint_reason,
+                prior_attempt_errors=prior_attempt_errors,
+            )
+        except LlmUnavailableError as exc:
+            self._llm_call_error = exc.reason
+            raise PrepareFailedError(exc.reason) from exc
+        self._llm_call_error = None
+        return result
 
     def get_preparation_packet(self, job_posting_id: str) -> PreparationPacketView | None:
         """Return the Preparation Packet with the current Match Assessment, if any."""
