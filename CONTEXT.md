@@ -103,7 +103,7 @@ The live judge or tailor cannot run — missing credentials or provider failure.
 _Avoid_: offline mode, fallback scorer, Fake assessment (as a user-facing mode)
 
 **LLM Run**:
-A user-triggered sequential stretch of judge or Prepare calls on Assessment Summary — catalog Pending assess (until Pending is empty) or Bulk Prepare — with at most one in flight at a time. While running, the catalog shows phase (Judging or Preparing), Job Posting identity, and live k of n for this run (`n` can grow if new Pending joins), plus Stop. Leave/refresh, Stop, or a Master CV / Hard Constraints / Preferences fingerprint change mid-run aborts the rest after the current posting’s call finishes (cooperative); successes already saved stay; no auto-resume. Not background unattended rejudge; Crawl / file-change opportunistic rejudge (one Pending) is not an LLM Run. Rules: ADR-0015.
+A user-triggered stretch of judge or Prepare calls on Assessment Summary — catalog Pending assess (until Pending is empty; may judge several Job Postings at once) or Bulk Prepare (one at a time) — with at most one LLM Run active overall. While running, the catalog shows phase (Judging or Preparing), the Job Posting identity or identities currently in flight, and live k of n for this run (`n` can grow if new Pending joins), plus Stop. Leave/refresh, Stop, or a Master CV / Hard Constraints / Preferences fingerprint change mid-run aborts the rest once every in-flight posting’s call finishes (cooperative); successes already saved stay; no auto-resume. Not background unattended rejudge; Crawl / file-change opportunistic rejudge (one Pending) is not an LLM Run. Rules: ADR-0015.
 _Avoid_: background job, worker, LLM task, cost session, ops console, spend meter
 
 **Match Assessment**:
