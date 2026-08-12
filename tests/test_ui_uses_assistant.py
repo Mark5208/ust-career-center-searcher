@@ -580,8 +580,10 @@ def test_catalog_page_with_wired_assistant_shows_empty_catalog(tmp_path: Path) -
     assert "No Job Postings" in response.text
 
 
-def test_catalog_get_is_fast_and_assess_llm_run_budgets_five(tmp_path: Path) -> None:
-    """GET / does not judge; explicit assess LLM Run budgets five (ADR-0015)."""
+def test_catalog_get_is_fast_and_assess_llm_run_drains_until_empty(
+    tmp_path: Path,
+) -> None:
+    """GET / does not judge; explicit assess LLM Run drains until empty (ADR-0015)."""
     import time
 
     cv_path = tmp_path / "master_CV.yaml"
@@ -643,11 +645,11 @@ def test_catalog_get_is_fast_and_assess_llm_run_budgets_five(tmp_path: Path) -> 
     while time.monotonic() < deadline and assistant.get_llm_run_status().active:
         time.sleep(0.01)
     assert not assistant.get_llm_run_status().active
-    assert judge.judge_calls == 5
+    assert judge.judge_calls == 6
     pending_after = sum(
         1 for row in assistant.list_assessment_summaries() if row.pending
     )
-    assert pending_after == 1
+    assert pending_after == 0
 
 
 def test_candidate_page_calls_assistant_for_snapshot_and_constraint_paths() -> None:

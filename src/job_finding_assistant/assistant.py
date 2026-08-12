@@ -284,10 +284,6 @@ class _EnrichmentSession:
             self.dimension_answers = {}
 
 
-# Catalog assess LLM Run attempts at most this many Pending heads per start.
-_CATALOG_ASSESS_LLM_RUN_BUDGET = 5
-
-
 @dataclass
 class _LlmRunState:
     """Mutable process-local LLM Run fields guarded by Assistant._llm_run_lock."""
@@ -415,14 +411,14 @@ class Assistant:
         return self.get_llm_run_status()
 
     def start_catalog_assess_llm_run(self) -> LlmRunStatus:
-        """Start an explicit catalog assess LLM Run (up to five Pending attempts).
+        """Start an explicit catalog assess LLM Run (until Pending empty).
 
-        Sequential; early-stop on LLM Unavailable; deferred/failed heads do not starve
+        Sequential with live ``k of n``; early-stop on LLM Unavailable; candidate-file
+        fingerprint clear mid-run aborts like Stop; deferred/failed heads do not starve
         later Pending ids. Raises ``LlmRunAlreadyInFlight`` when a run is active.
         """
         self._refresh_candidate_file_state()
         pending_count = len(self._catalog_store.list_pending_job_posting_ids())
-        planned = min(_CATALOG_ASSESS_LLM_RUN_BUDGET, pending_count)
         with self._llm_run_lock:
             if self._llm_run_state.active:
                 phase = self._llm_run_state.phase or "Judging"
@@ -434,12 +430,11 @@ class Assistant:
                 active=True,
                 phase="Judging",
                 current_index=None,
-                total=planned or None,
+                total=pending_count or None,
                 message=None,
             )
             thread = threading.Thread(
                 target=self._run_catalog_assess_llm_run,
-                kwargs={"planned_total": planned},
                 name="catalog-assess-llm-run",
                 daemon=True,
             )
@@ -521,20 +516,28 @@ class Assistant:
             thread.start()
         return self.get_llm_run_status()
 
-    def _run_catalog_assess_llm_run(self, *, planned_total: int) -> None:
+    def _run_catalog_assess_llm_run(self) -> None:
         processed = 0
-        budget = _CATALOG_ASSESS_LLM_RUN_BUDGET
+        files_changed = False
         try:
-            for _ in range(budget):
+            while True:
                 if self._llm_run_stop.is_set():
+                    break
+                if processed > 0 and self._refresh_candidate_file_state():
+                    files_changed = True
+                    with self._llm_run_lock:
+                        if self._llm_run_state.active:
+                            self._llm_run_stop.set()
+                            self._llm_run_state.stop_requested = True
                     break
 
                 def _announce(job_id: str, *, _processed: int = processed) -> None:
+                    pending = self._catalog_store.list_pending_job_posting_ids()
                     self._set_llm_run_current(
                         phase="Judging",
                         job_posting_id=job_id,
                         current_index=_processed + 1,
-                        total=max(planned_total, _processed + 1),
+                        total=_processed + len(pending),
                     )
 
                 outcome = self._rejudge_one_pending_after_refresh(on_selected=_announce)
@@ -543,7 +546,13 @@ class Assistant:
                 processed += 1
                 if outcome == "llm_failed":
                     break
-            if self._llm_run_stop.is_set():
+            if files_changed:
+                message = (
+                    f"Candidate files changed after {processed} Pending "
+                    f"{'attempt' if processed == 1 else 'attempts'}; "
+                    f"start again to continue."
+                )
+            elif self._llm_run_stop.is_set():
                 message = (
                     f"Stopped after {processed} Pending "
                     f"{'attempt' if processed == 1 else 'attempts'}."
@@ -1366,7 +1375,7 @@ class Assistant:
         """Opportunistically judge Pending Match Assessments (after Crawl / file change).
 
         Budgets at most one Pending Job Posting per call so Crawl / file-change paths
-        are not stacked with a five-call batch (ADR-0015). Refresh again to continue.
+        are not stacked with a catalog assess drain (ADR-0015). Refresh again to continue.
 
         When a posting fails or is skipped, it is deferred for this process so later
         Pending ids can still advance; after a full pass the deferred heads are retried.
@@ -1458,13 +1467,15 @@ class Assistant:
         ]
         return sorted(filtered, key=_summary_sort_key)
 
-    def _refresh_candidate_file_state(self) -> None:
+    def _refresh_candidate_file_state(self) -> bool:
         """Internal freshness gate: Master CV / HC / Preferences content or path-clear.
 
         On change: rebuild Snapshot (via Master CV store), mark **all** assessments
         Pending, mark Preparation Packets Stale, and record path/read errors.
         Does not auto-rejudge or auto-regenerate packets. Callers use public
         Assistant methods; out-of-band disk edits are observed on the next use.
+
+        Returns True when this call cleared all assessments due to a fingerprint change.
         """
         errors: list[str] = []
         master_path = self._master_cv.master_cv_path()
@@ -1501,12 +1512,15 @@ class Assistant:
         # still update stored fingerprints; only Pending-all when there was a prior
         # non-null fingerprint or a real path/content transition after assessments exist.
         had_prior = any(value is not None for value in previous.values())
+        cleared = False
         if changed and had_prior:
             self._catalog_store.clear_all_match_assessments()
             self._packet_store.mark_all_stale()
             self._rejudge_skip_ids.clear()
+            cleared = True
         if changed or not had_prior:
             self._catalog_store.save_candidate_fingerprints(**current)
+        return cleared
 
     def _assess_job_posting(
         self, job_posting_id: str

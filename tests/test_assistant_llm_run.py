@@ -13,7 +13,7 @@ from job_finding_assistant.assistant import (
     BulkPrepareNeedsConfirm,
     LlmRunAlreadyInFlight,
 )
-from job_finding_assistant.catalog_store import CatalogStore
+from job_finding_assistant.catalog_store import CatalogStore, JobPosting
 from job_finding_assistant.fakes import (
     FakeConstraintFilesStore,
     FakeJobBoardSession,
@@ -138,7 +138,9 @@ class _BlockingRelevanceJudge(FakeLlmJudge):
         return super().judge_relevance(*args, **kwargs)
 
 
-def test_start_catalog_assess_llm_run_processes_up_to_five(tmp_path: Path) -> None:
+def test_start_catalog_assess_llm_run_drains_until_pending_empty(
+    tmp_path: Path,
+) -> None:
     entries = [
         _open_posting(job_id=str(86534 + i), title=f"Engineer {i}", employer=f"E{i}")
         for i in range(6)
@@ -151,12 +153,13 @@ def test_start_catalog_assess_llm_run_processes_up_to_five(tmp_path: Path) -> No
     finished = _wait_llm_run_idle(assistant)
 
     assert not finished.active
-    assert judge.judge_calls == 5
+    assert judge.judge_calls == 6
     catalog = assistant.load_assessment_summary_catalog()
-    assert catalog.pending_remaining == 1
-    assert sum(1 for row in catalog.rows if row.summary.pending) == 1
+    assert catalog.pending_remaining == 0
+    assert all(not row.summary.pending for row in catalog.rows)
     assert finished.message is not None
-    assert "5" in finished.message
+    assert "6" in finished.message
+    assert "0 still Pending" in finished.message or "none left" in finished.message.lower()
 
 
 def test_catalog_assess_llm_run_early_stops_on_llm_unavailable(tmp_path: Path) -> None:
@@ -214,6 +217,79 @@ def test_stop_llm_run_finishes_current_and_does_not_start_next(tmp_path: Path) -
     assert assistant.load_assessment_summary_catalog().pending_remaining == 1
     assert finished.message is not None
     assert "Stopped" in finished.message
+
+
+def test_catalog_assess_llm_run_aborts_when_candidate_files_change(
+    tmp_path: Path,
+) -> None:
+    entries = [
+        _open_posting(job_id="86534", title="Engineer A"),
+        _open_posting(job_id="86535", title="Engineer B", employer="Other"),
+        _open_posting(job_id="86536", title="Engineer C", employer="Third"),
+    ]
+    judge = _BlockingRelevanceJudge()
+    assistant, _, _ = _assistant(tmp_path, entries=entries, llm_judge=judge)
+    cv_path = tmp_path / "master_CV.yaml"
+
+    assistant.start_catalog_assess_llm_run()
+    assert judge.entered.wait(timeout=5)
+    cv_path.write_text(
+        _SAMPLE_CV.replace("Platform engineer", "Staff platform engineer"),
+        encoding="utf-8",
+    )
+    judge.release.set()
+    finished = _wait_llm_run_idle(assistant)
+
+    assert not finished.active
+    assert judge.judge_calls == 1
+    assert assistant.load_assessment_summary_catalog().pending_remaining > 0
+    assert finished.message is not None
+    assert "files changed" in finished.message.lower()
+    assert "start again" in finished.message.lower()
+    assert not assistant.get_llm_run_status().active
+
+
+def test_catalog_assess_llm_run_judges_pending_added_mid_run(
+    tmp_path: Path,
+) -> None:
+    entries = [
+        _open_posting(job_id="86534", title="Engineer A"),
+        _open_posting(job_id="86535", title="Engineer B", employer="Other"),
+    ]
+    judge = _BlockingRelevanceJudge()
+    assistant, _, _ = _assistant(tmp_path, entries=entries, llm_judge=judge)
+
+    assistant.start_catalog_assess_llm_run()
+    assert judge.entered.wait(timeout=5)
+    assistant._catalog_store.commit_crawl_detail(
+        JobPosting(
+            id="86599",
+            title="Engineer Joined",
+            employer="Crawl Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            posting_date="2026-07-01",
+            application_deadline="2026-12-31",
+            detail_fields={
+                "Job Description": "Build reliable systems in Python.",
+                "Work Location": "Hong Kong",
+            },
+            list_fingerprint="joined-mid-run",
+        )
+    )
+    judge.release.set()
+    finished = _wait_llm_run_idle(assistant)
+
+    assert not finished.active
+    assert judge.judge_calls == 3
+    catalog = assistant.load_assessment_summary_catalog()
+    assert catalog.pending_remaining == 0
+    assert {row.summary.job_posting_id for row in catalog.rows} >= {
+        "86534",
+        "86535",
+        "86599",
+    }
+    assert all(not row.summary.pending for row in catalog.rows)
 
 
 def test_rejudge_pending_assessments_stays_one_and_is_not_llm_run(
