@@ -184,7 +184,7 @@ def test_rejudge_pending_assessments_budgets_one_posting_per_call(tmp_path: Path
     assert judge.judge_calls == 2
 
 
-def test_load_assessment_summary_catalog_processes_up_to_five_and_reports_progress(
+def test_load_assessment_summary_catalog_does_not_run_pending_judge_batch(
     tmp_path: Path,
 ) -> None:
     entries_and_details = [
@@ -213,54 +213,12 @@ def test_load_assessment_summary_catalog_processes_up_to_five_and_reports_progre
 
     catalog = assistant.load_assessment_summary_catalog()
 
-    assert catalog.processed_this_load == 5
-    assert catalog.pending_remaining == 1
+    assert catalog.pending_remaining == 6
     assert len(catalog.rows) == 6
-    assert sum(1 for row in catalog.rows if row.summary.pending) == 1
-    assert sum(1 for row in catalog.rows if row.can_prepare) == 5
-    assert judge.judge_calls == 5
-
-    caught_up = assistant.load_assessment_summary_catalog()
-    assert caught_up.processed_this_load == 1
-    assert caught_up.pending_remaining == 0
-    assert all(not row.summary.pending for row in caught_up.rows)
-    assert all(row.can_prepare for row in caught_up.rows)
-
-
-def test_load_assessment_summary_catalog_early_stops_on_llm_unavailable(
-    tmp_path: Path,
-) -> None:
-    entries_and_details = [
-        _open_posting(
-            job_id=str(86534 + i),
-            title=f"Engineer {i}",
-            employer=f"Employer {i}",
-        )
-        for i in range(3)
-    ]
-    job_board = FakeJobBoardSession(
-        authenticated=True,
-        list_entries=[entry for entry, _ in entries_and_details],
-        details={detail.id: detail for _, detail in entries_and_details},
-    )
-    judge = FakeLlmJudge(available=False)
-    cv_path = _write_cv(tmp_path)
-    assistant = _assistant(
-        tmp_path,
-        job_board=job_board,
-        master_cv=FakeMasterCvStore(),
-        llm_judge=judge,
-    )
-    assistant.set_master_cv_path(str(cv_path))
-    assistant.run_crawl()
-
-    catalog = assistant.load_assessment_summary_catalog()
-
-    assert catalog.processed_this_load == 1
-    assert catalog.pending_remaining == 3
-    assert catalog.llm_unavailable_reason == "LLM Unavailable: Fake judge disabled"
     assert all(row.summary.pending for row in catalog.rows)
+    assert all(not row.can_prepare for row in catalog.rows)
     assert judge.judge_calls == 0
+    assert not assistant.get_llm_run_status().active
 
 
 def test_rejudge_does_not_starve_later_pending_when_head_fails(tmp_path: Path) -> None:

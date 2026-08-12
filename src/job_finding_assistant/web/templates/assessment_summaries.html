@@ -141,13 +141,28 @@
       {% if llm_unavailable_reason %}
       <p class="empty">{{ llm_unavailable_reason }}</p>
       {% endif %}
-      {% if processed_this_load > 0 and pending_remaining > 0 %}
-      <p class="empty">
-        Processed {{ processed_this_load }} Pending this load;
-        {{ pending_remaining }} still Pending. Refresh to continue.
-      </p>
-      {% elif processed_this_load > 0 and pending_remaining == 0 %}
-      <p class="empty">Processed {{ processed_this_load }} Pending this load; none left.</p>
+      {% if llm_run.active or llm_run.message or pending_remaining > 0 %}
+      <div id="llm-run-panel" class="empty" data-active="{{ '1' if llm_run.active else '0' }}">
+        {% if llm_run.active %}
+        <p id="llm-run-status">
+          {{ llm_run.phase }}:
+          {% if llm_run.title %}{{ llm_run.title }}{% if llm_run.employer %} — {{ llm_run.employer }}{% endif %}{% else %}…{% endif %}
+          {% if llm_run.current_index is not none and llm_run.total is not none %}
+          ({{ llm_run.current_index }} of {{ llm_run.total }})
+          {% endif %}
+        </p>
+        <form method="post" action="/llm-run/stop" style="margin-top: 0.5rem">
+          <button type="submit" id="llm-run-stop">Stop</button>
+        </form>
+        {% else %}
+        <p id="llm-run-status">{% if llm_run.message %}{{ llm_run.message }}{% elif pending_remaining > 0 %}{{ pending_remaining }} Pending. Start an LLM Run to assess.{% endif %}</p>
+        {% if pending_remaining > 0 %}
+        <form method="post" action="/llm-run/assess" style="margin-top: 0.5rem">
+          <button type="submit" id="llm-run-assess">Assess Pending</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </div>
       {% endif %}
       {% if prepare_error %}
       <p class="empty">{{ prepare_error }}</p>
@@ -209,17 +224,88 @@
       <script>
         (function () {
           var selectAll = document.getElementById("select-all");
-          if (!selectAll) return;
-          selectAll.addEventListener("change", function () {
-            document.querySelectorAll(".row-select").forEach(function (box) {
-              box.checked = selectAll.checked;
+          if (selectAll) {
+            selectAll.addEventListener("change", function () {
+              document.querySelectorAll(".row-select").forEach(function (box) {
+                box.checked = selectAll.checked;
+              });
             });
-          });
+          }
         })();
       </script>
       {% else %}
       <p class="empty">No Job Postings in the catalog yet.</p>
       {% endif %}
+      <script>
+        (function () {
+          var panel = document.getElementById("llm-run-panel");
+          if (!panel) return;
+          var statusEl = document.getElementById("llm-run-status");
+          var pollTimer = null;
+          var stoppingOnLeave = false;
+
+          function formatStatus(data) {
+            if (!data.active) {
+              return data.message || "";
+            }
+            var label = data.phase || "LLM Run";
+            var identity = data.title
+              ? data.title + (data.employer ? " — " + data.employer : "")
+              : "…";
+            var progress =
+              data.current_index != null && data.total != null
+                ? " (" + data.current_index + " of " + data.total + ")"
+                : "";
+            return label + ": " + identity + progress;
+          }
+
+          function render(data) {
+            if (!statusEl) return;
+            statusEl.textContent = formatStatus(data);
+            panel.setAttribute("data-active", data.active ? "1" : "0");
+          }
+
+          function poll() {
+            fetch("/llm-run/status", { headers: { Accept: "application/json" } })
+              .then(function (response) {
+                return response.json();
+              })
+              .then(function (data) {
+                render(data);
+                if (data.active) {
+                  pollTimer = window.setTimeout(poll, 500);
+                } else if (pollTimer) {
+                  window.clearTimeout(pollTimer);
+                  pollTimer = null;
+                  window.location.reload();
+                }
+              })
+              .catch(function () {
+                pollTimer = window.setTimeout(poll, 1000);
+              });
+          }
+
+          function requestStop() {
+            if (stoppingOnLeave) return;
+            if (panel.getAttribute("data-active") !== "1") return;
+            stoppingOnLeave = true;
+            try {
+              fetch("/llm-run/stop", {
+                method: "POST",
+                headers: { Accept: "application/json" },
+                keepalive: true,
+              });
+            } catch (err) {
+              /* ignore leave-time stop failures */
+            }
+          }
+
+          if (panel.getAttribute("data-active") === "1") {
+            poll();
+          }
+          window.addEventListener("pagehide", requestStop);
+        })();
+      </script>
     </main>
   </body>
 </html>

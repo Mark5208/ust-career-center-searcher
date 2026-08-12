@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0017`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary (row checkboxes + **Bulk Prepare** / **Bulk Delete**), Match Assessment detail (`/jobs/{id}` with **Signal Summary** + collapsible **Signal Sections** for Hard Constraint / Preference / Relevance Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests). **LLM Run** activity UX decided (#23); **not implemented in UI yet**.
+**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary (row checkboxes + **Bulk Prepare** / **Bulk Delete** + **LLM Run** activity UX: explicit catalog assess / Bulk Prepare as process-local run with status poll + Stop), Match Assessment detail (`/jobs/{id}` with **Signal Summary** + collapsible **Signal Sections** for Hard Constraint / Preference / Relevance Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests).
 
 ## Primary seam
 
@@ -24,10 +24,10 @@ Structured languages / locations / Gap Tolerance Preferences form is superseded 
 
 ### Assessment freshness (ADR-0014)
 
-Implemented through an internal `Assistant` candidate-file freshness gate (fingerprint Pending/Stale side effects) plus opportunistic rejudge (`load_assessment_summary_catalog` on Assessment Summary load; `rejudge_pending_assessments` after Crawl / file change). Out-of-band disk edits are observed on the next public Assistant use — there is no public refresh method:
+Implemented through an internal `Assistant` candidate-file freshness gate (fingerprint Pending/Stale side effects) plus opportunistic rejudge (`rejudge_pending_assessments` after Crawl / file change; catalog assess via explicit `start_catalog_assess_llm_run`). Out-of-band disk edits are observed on the next public Assistant use — there is no public refresh method:
 
 - Candidate-file “change” = content or path clear (fingerprint on next check); not path-only; no always-on watcher.
-- On change: Snapshot now; **all** assessments Pending (Open and Closed); re-judge opportunistic (catalog UI via `load_assessment_summary_catalog` on load).
+- On change: Snapshot now; **all** assessments Pending (Open and Closed); re-judge opportunistic (Crawl / file-change one Pending; catalog assess is an explicit LLM Run).
 - Crawl: catalog sync independent of assessment; new/detail-changed → Pending then opportunistic re-judge; Crawl does not Stale packets (ADR-0013; packets still absent).
 - Unreadable Master CV → no Snapshot, Pending + error; unreadable HC/Prefs path → unknown + path error (not Pending).
 - Judge failure → leave Pending (never half-assessed final row).
@@ -54,7 +54,7 @@ Implemented through `Assistant` / `MatchAssessment` / `CatalogStore` (persisted 
 
 ### LLM runtime (ADR-0015)
 
-`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor + enricher). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` / `UnavailableLlmCvEnricher` (not Fake). Judge/tailor/enricher adapters own short non-secret **LLM Unavailable** reasons (`unavailable_reason()` + `LlmUnavailableError.reason`); `Assistant` only pass-through-caches them for the catalog / Prepare / Enrichment error. Provider/parse/timeout/unexpected failures → Pending or keep prior assessment; Prepare tailor failures stay atomic. Assessment Summary `GET /` uses `load_assessment_summary_catalog` (one refresh + at most five Pending rejudge attempts + progress banner; early-stop that load on LLM Unavailable); `rejudge_pending_assessments` stays one Pending per call for Crawl / file-change. Failed/skipped heads are deferred so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no confirm-before-batch; no LLM batch pacing beyond sequential in-request calls. **LLM Run** activity UX (explicit catalog assess + poll/Stop) is decided in ADR-0015 / #23 but not shipped in UI yet.
+`build_default_assistant` wires `llm_runtime.build_llm_ports` from env (`JOB_FINDING_ASSISTANT_LLM_API_KEY`, optional base URL / one model for judge + tailor + enricher). Missing key → `UnavailableLlmJudge` / `UnavailableLlmCvTailor` / `UnavailableLlmCvEnricher` (not Fake). Judge/tailor/enricher adapters own short non-secret **LLM Unavailable** reasons (`unavailable_reason()` + `LlmUnavailableError.reason`); `Assistant` only pass-through-caches them for the catalog / Prepare / Enrichment error. Provider/parse/timeout/unexpected failures → Pending or keep prior assessment; Prepare tailor failures stay atomic. Assessment Summary `GET /` uses `load_assessment_summary_catalog` (fast refresh + rows; no Pending judge batch). Catalog assess and Bulk Prepare are process-local **LLM Run**s (`start_catalog_assess_llm_run` / `start_bulk_prepare_llm_run` + `get_llm_run_status` / `stop_llm_run`; at most one in flight; catalog assess up to five Pending; early-stop on LLM Unavailable; cooperative Stop). `rejudge_pending_assessments` stays one Pending per call for Crawl / file-change with no LLM Run banner. Failed/skipped heads are deferred so later Pending ids are not starved. No offline/heuristic fallback; no cost meter; no confirm-before-batch; no parallel judging.
 
 ## Decided Master CV format (ADR-0007) — as shipped in code
 
@@ -103,7 +103,8 @@ Implemented through `Assistant.prepare` / `load_preparation_packet_page` (UI) / 
 - Stale only when Master CV / HC file / Preferences file change; Stale packets stay readable with banner; Crawl detail does not Stale.
 - Tool-managed packet store (keyed by Job Posting); download PDF/YAML; Gap Report / Edit Summary UI-only in v1.
 - Delete confirms then hard-removes posting + assessment + packet (no trash/undo).
-- **Bulk Prepare / Bulk Delete** (catalog checkboxes): shipped via `Assistant.bulk_prepare` / `bulk_delete` + Assessment Summary UI (parent #22). Skips Pending / not-`can_prepare` with counts; one combined HC-fail + overwrite confirm (or immediate); sequential; stop rest on LLM Unavailable; continue after other Prepare failures. Bulk Delete one confirm listing assessment/packet presence, then sequential cascade. Single-item Prepare/Delete remain on Match Assessment detail.
+- **Bulk Prepare / Bulk Delete** (catalog checkboxes): shipped via `Assistant.bulk_prepare` / `start_bulk_prepare_llm_run` / `bulk_delete` + Assessment Summary UI (parents #22 / #23). Skips Pending / not-`can_prepare` with counts; one combined HC-fail + overwrite confirm (or immediate); Bulk Prepare runs as an LLM Run (sequential; stop rest on LLM Unavailable; continue after other Prepare failures). Bulk Delete one confirm listing assessment/packet presence, then sequential cascade. Single-item Prepare/Delete remain on Match Assessment detail.
+- **LLM Run** (Assessment Summary): shipped via `Assistant.start_catalog_assess_llm_run` / `start_bulk_prepare_llm_run` / `get_llm_run_status` / `stop_llm_run` + thin poll/Stop UI (parent #23).
 
 ## Scaffold slice (issue #2)
 
@@ -141,6 +142,6 @@ Through `Assistant` and `/` Assessment Summary UI:
 - Assessment Summary shows title, employer, Listing status, Deadline status, Hard Constraint, Preference, Relevance, Preparation Packet presence/Stale (packet absent in this slice).
 - Default filter: Open + Deadline Upcoming/Unknown; Closed and Deadline Passed toggleable; sort Pending last, Hard Constraint fail after pass/unknown, Preference then Relevance, sooner deadline (Deadline Unknown last among ties).
 - Hard Constraint / Preference / Relevance via fakeable `LlmJudge` with input isolation; empty HC/Prefs → unknown without judge; Prepare unavailable only while Pending (HC fail does not block).
-- Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic rejudge via `load_assessment_summary_catalog` / `rejudge_pending_assessments`.
+- Fingerprint change (content or path clear) marks **all** assessments Pending; Crawl new/detail-changed starts Pending (Crawl success ≠ assessments done); opportunistic rejudge via `rejudge_pending_assessments` (one Pending); catalog assess via explicit LLM Run.
 
 Prepare / packets / Delete shipped in #13–#14.
