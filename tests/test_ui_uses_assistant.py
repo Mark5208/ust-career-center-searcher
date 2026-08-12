@@ -9,6 +9,12 @@ from job_finding_assistant.assistant import (
     AssessmentSummaryCatalog,
     AssessmentSummaryCatalogRow,
     Assistant,
+    BulkDeleteConfirmItem,
+    BulkDeleteNeedsConfirm,
+    BulkDeleteResult,
+    BulkPrepareConfirmItem,
+    BulkPrepareNeedsConfirm,
+    BulkPrepareResult,
     CandidateFilesView,
     CrawlFilters,
     CrawlOutcome,
@@ -76,6 +82,14 @@ class _RecordingAssistant:
             "Delete permanently removes Job Posting 'System Engineer — Example Corp', "
             "Match Assessment, and Preparation Packet. No undo."
         )
+        self.bulk_prepare_calls: list[tuple[list[str], bool]] = []
+        self.bulk_delete_calls: list[tuple[list[str], bool]] = []
+        self.bulk_prepare_needs_confirm = False
+        self.bulk_delete_needs_confirm = False
+        self.bulk_prepare_result = BulkPrepareResult(
+            prepared=[], skipped=[], failed=[], stopped=[]
+        )
+        self.bulk_delete_result = BulkDeleteResult(deleted=[])
         self.match_assessments: dict[str, MatchAssessment] = {}
 
     def load_assessment_summary_catalog(
@@ -174,6 +188,46 @@ class _RecordingAssistant:
         self.summaries = [
             row for row in self.summaries if row.job_posting_id != job_posting_id
         ]
+
+    def bulk_prepare(
+        self, job_posting_ids: list[str], *, confirm: bool = False
+    ) -> BulkPrepareResult:
+        self.bulk_prepare_calls.append((list(job_posting_ids), confirm))
+        if self.bulk_prepare_needs_confirm and not confirm:
+            raise BulkPrepareNeedsConfirm(
+                [
+                    BulkPrepareConfirmItem(
+                        job_posting_id=job_posting_ids[0],
+                        title="System Engineer",
+                        employer="Example Corp",
+                        kind="hard_constraint_fail",
+                        reason="Requires relocation outside Hong Kong",
+                    )
+                ],
+                selected_ids=list(job_posting_ids),
+                eligible_ids=list(job_posting_ids),
+                skipped_ids=[],
+            )
+        return self.bulk_prepare_result
+
+    def bulk_delete(
+        self, job_posting_ids: list[str], *, confirm: bool = False
+    ) -> BulkDeleteResult:
+        self.bulk_delete_calls.append((list(job_posting_ids), confirm))
+        if self.bulk_delete_needs_confirm and not confirm:
+            raise BulkDeleteNeedsConfirm(
+                [
+                    BulkDeleteConfirmItem(
+                        job_posting_id=job_id,
+                        title="System Engineer",
+                        employer="Example Corp",
+                        has_match_assessment=True,
+                        has_preparation_packet=True,
+                    )
+                    for job_id in job_posting_ids
+                ]
+            )
+        return self.bulk_delete_result
 
     def rejudge_pending_assessments(self) -> None:
         self.rejudge_calls += 1
@@ -342,10 +396,16 @@ def test_catalog_page_shows_assessment_fields_and_prepare_unavailable_when_pendi
     assert "System Engineer" in response.text
     assert "Example Corp" in response.text
     assert "Pending" in response.text
-    assert "Prepare unavailable" in response.text
     assert "Strong" in response.text
     assert "pass" in response.text
     assert "Preference" in response.text
+    assert "Bulk Prepare" in response.text
+    assert "Bulk Delete" in response.text
+    assert 'name="job_posting_ids"' in response.text
+    assert 'id="select-all"' in response.text
+    assert 'action="/jobs/86534/prepare"' not in response.text
+    assert 'action="/jobs/86534/delete"' not in response.text
+    assert "Prepare unavailable" not in response.text
     assert assistant.catalog_load_calls == 1
     assert assistant.match_assessment_page_calls == []
 
@@ -616,7 +676,7 @@ def test_crawl_page_uses_assistant_for_login_filters_and_run() -> None:
     assert "Last Crawl: completed" in after.text
 
 
-def test_catalog_prepare_and_packet_routes_use_assistant() -> None:
+def test_catalog_bulk_prepare_and_packet_routes_use_assistant() -> None:
     assistant = _RecordingAssistant()
     assistant.summaries = [
         AssessmentSummary(
@@ -632,17 +692,24 @@ def test_catalog_prepare_and_packet_routes_use_assistant() -> None:
             has_preparation_packet=False,
         )
     ]
+    assistant.bulk_prepare_result = BulkPrepareResult(
+        prepared=["86534"], skipped=[], failed=[], stopped=[]
+    )
     client = TestClient(create_app(assistant))
 
     catalog = client.get("/")
     assert catalog.status_code == 200
-    assert "Prepare" in catalog.text
-    assert "Prepare unavailable" not in catalog.text
+    assert "Bulk Prepare" in catalog.text
+    assert 'action="/jobs/86534/prepare"' not in catalog.text
 
-    prepare = client.post("/jobs/86534/prepare", follow_redirects=False)
+    prepare = client.post(
+        "/bulk/prepare",
+        data={"job_posting_ids": ["86534"]},
+        follow_redirects=False,
+    )
     assert prepare.status_code == 303
-    assert prepare.headers["location"] == "/jobs/86534/packet"
-    assert assistant.prepare_calls == ["86534"]
+    assert prepare.headers["location"] == "/"
+    assert assistant.bulk_prepare_calls == [(["86534"], False)]
 
     packet = PreparationPacket(
         job_posting_id="86534",
@@ -683,9 +750,48 @@ def test_catalog_prepare_and_packet_routes_use_assistant() -> None:
     assert pdf_resp.content.startswith(b"%PDF")
 
 
-def test_catalog_delete_route_uses_assistant_with_confirm() -> None:
+def test_catalog_bulk_prepare_shows_combined_confirm() -> None:
     assistant = _RecordingAssistant()
-    assistant.delete_needs_confirm = True
+    assistant.bulk_prepare_needs_confirm = True
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="fail",
+            preference="Strong",
+            relevance="Strong",
+        )
+    ]
+    client = TestClient(create_app(assistant))
+
+    needs_confirm = client.post(
+        "/bulk/prepare",
+        data={"job_posting_ids": ["86534"]},
+        follow_redirects=False,
+    )
+    assert needs_confirm.status_code == 200
+    assert "Confirm Bulk Prepare" in needs_confirm.text
+    assert "Requires relocation outside Hong Kong" in needs_confirm.text
+    assert assistant.bulk_prepare_calls == [(["86534"], False)]
+
+    confirmed = client.post(
+        "/bulk/prepare",
+        data={"job_posting_ids": ["86534"], "confirm": "1"},
+        follow_redirects=False,
+    )
+    assert confirmed.status_code == 303
+    assert confirmed.headers["location"] == "/"
+    assert assistant.bulk_prepare_calls == [(["86534"], False), (["86534"], True)]
+
+
+def test_catalog_bulk_delete_uses_assistant_with_confirm() -> None:
+    assistant = _RecordingAssistant()
+    assistant.bulk_delete_needs_confirm = True
+    assistant.bulk_delete_result = BulkDeleteResult(deleted=["86534"])
     assistant.summaries = [
         AssessmentSummary(
             job_posting_id="86534",
@@ -704,24 +810,74 @@ def test_catalog_delete_route_uses_assistant_with_confirm() -> None:
 
     catalog = client.get("/")
     assert catalog.status_code == 200
-    assert "Delete" in catalog.text
+    assert "Bulk Delete" in catalog.text
+    assert 'action="/jobs/86534/delete"' not in catalog.text
 
-    needs_confirm = client.post("/jobs/86534/delete", follow_redirects=False)
+    needs_confirm = client.post(
+        "/bulk/delete",
+        data={"job_posting_ids": ["86534"]},
+        follow_redirects=False,
+    )
     assert needs_confirm.status_code == 200
-    assert "Confirm Delete" in needs_confirm.text
+    assert "Confirm Bulk Delete" in needs_confirm.text
     assert "System Engineer" in needs_confirm.text
     assert "Match Assessment" in needs_confirm.text
     assert "Preparation Packet" in needs_confirm.text
-    assert assistant.delete_calls == [("86534", False)]
+    assert assistant.bulk_delete_calls == [(["86534"], False)]
 
     confirmed = client.post(
-        "/jobs/86534/delete",
-        data={"confirm": "1"},
+        "/bulk/delete",
+        data={"job_posting_ids": ["86534"], "confirm": "1"},
         follow_redirects=False,
     )
     assert confirmed.status_code == 303
     assert confirmed.headers["location"] == "/"
-    assert assistant.delete_calls == [("86534", False), ("86534", True)]
+    assert assistant.bulk_delete_calls == [(["86534"], False), (["86534"], True)]
+
+
+def test_match_assessment_detail_keeps_single_prepare_and_delete() -> None:
+    assistant = _RecordingAssistant()
+    assistant.delete_needs_confirm = True
+    assistant.summaries = [
+        AssessmentSummary(
+            job_posting_id="86534",
+            title="System Engineer",
+            employer="Example Corp",
+            listing_status="Open",
+            deadline_status="Upcoming",
+            pending=False,
+            hard_constraint_outcome="pass",
+            preference="Strong",
+            relevance="Strong",
+        )
+    ]
+    assistant.match_assessments["86534"] = MatchAssessment(
+        job_posting_id="86534",
+        hard_constraint_outcome="pass",
+        hard_constraint_reason="No hard constraint violations",
+        preference="Strong",
+        preference_reason="Fits preferences",
+        relevance="Strong",
+        evidence=[],
+        hard_constraint_evidence=[],
+        preference_evidence=[],
+    )
+    client = TestClient(create_app(assistant))
+
+    detail = client.get("/jobs/86534")
+    assert detail.status_code == 200
+    assert 'action="/jobs/86534/prepare"' in detail.text
+    assert 'action="/jobs/86534/delete"' in detail.text
+
+    prepare = client.post("/jobs/86534/prepare", follow_redirects=False)
+    assert prepare.status_code == 303
+    assert prepare.headers["location"] == "/jobs/86534/packet"
+    assert assistant.prepare_calls == ["86534"]
+
+    needs_confirm = client.post("/jobs/86534/delete", follow_redirects=False)
+    assert needs_confirm.status_code == 200
+    assert "Confirm Delete" in needs_confirm.text
+    assert assistant.delete_calls == [("86534", False)]
 
 
 def test_catalog_links_to_match_assessment_detail_page() -> None:

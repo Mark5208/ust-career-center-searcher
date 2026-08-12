@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Confirm Bulk Prepare — Job Finding Assistant</title>
+    <style>
+      :root {
+        --ink: #1a2332;
+        --muted: #5a6570;
+        --paper: #f3f6f8;
+        --line: #d5dde3;
+      }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background: linear-gradient(180deg, #dfe8ee 0%, var(--paper) 40%, #eef2f4 100%);
+        min-height: 100vh;
+      }
+      main {
+        max-width: 36rem;
+        margin: 0 auto;
+        padding: 3rem 1.5rem;
+      }
+      h1 { font-size: 1.75rem; margin: 0 0 0.75rem; }
+      p, li { color: var(--muted); line-height: 1.5; }
+      ul { padding-left: 1.2rem; }
+      button {
+        margin-top: 1rem;
+        font: inherit;
+        padding: 0.45rem 0.9rem;
+        cursor: pointer;
+      }
+      a { color: #5a6570; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Confirm Bulk Prepare</h1>
+      <p>
+        The eligible selection needs confirm before Prepare runs. Hard Constraint
+        fail reasons and packet overwrite warnings are listed below.
+      </p>
+      <ul>
+        {% for item in items %}
+        <li>
+          <strong>{{ item.title }} — {{ item.employer }}</strong>
+          {% if item.kind == "overwrite" %}
+          — overwrite Preparation Packet
+          {% else %}
+          — Hard Constraint fail: {{ item.reason }}
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% if skipped_ids %}
+      <p>Skipped (Pending / not ready): {{ skipped_ids|length }} selected row(s).</p>
+      {% endif %}
+      <form method="post" action="/bulk/prepare">
+        {% for job_id in selected_ids %}
+        <input type="hidden" name="job_posting_ids" value="{{ job_id }}" />
+        {% endfor %}
+        <input type="hidden" name="confirm" value="1" />
+        <button type="submit">Confirm Bulk Prepare</button>
+      </form>
+      <p><a href="/">Cancel</a></p>
+    </main>
+  </body>
+</html>

@@ -84,7 +84,7 @@ Preparation Packet artifacts live under the tool-managed `PacketStore` directory
 
 ```
 src/job_finding_assistant/
-  assistant.py              # Assistant + AssessmentSummary + page loads + CandidateFilesView + Enrichment + Prepare + CrawlOutcome
+  assistant.py              # Assistant + AssessmentSummary + page loads + CandidateFilesView + Enrichment + Prepare/Bulk + CrawlOutcome
   enrichment.py             # Enrichment types + Master CV entry patch / atomic write (ADR-0017)
   preparation_packet.py     # GapReport, EditSummary, TailorResult, PreparationPacket
   packet_store.py           # Tool-managed PacketStore (filesystem)
@@ -112,7 +112,8 @@ Assessment Summary projection: typed `AssessmentSummaryRow` from catalog + `Pack
 
 ## Candidate / Crawl / Assessment / Prepare UI
 
-- `/` — Assessment Summary list via `Assistant.load_assessment_summary_catalog` (default Open + Upcoming/Unknown; Closed/Passed toggles; links to Match Assessment detail; Prepare / Re-Prepare; Delete; packet presence/Stale; one refresh + at most five Pending rejudge attempts per load with early-stop on LLM Unavailable; progress banner for `processed_this_load` / `pending_remaining`; short non-secret LLM Unavailable reason when judge/tailor cannot run)
+- `/` — Assessment Summary list via `Assistant.load_assessment_summary_catalog` (default Open + Upcoming/Unknown; Closed/Passed toggles; links to Match Assessment detail; per-row checkboxes + select-all; **Bulk Prepare** / **Bulk Delete** via `Assistant.bulk_prepare` / `bulk_delete` — no per-row Prepare/Delete; packet presence/Stale; one refresh + at most five Pending rejudge attempts per load with early-stop on LLM Unavailable; progress banner for `processed_this_load` / `pending_remaining`; short non-secret LLM Unavailable reason when judge/tailor cannot run)
+- POST `/bulk/prepare` / `/bulk/delete` — catalog bulk actions with combined confirm pages; result counts flash on Assessment Summary
 - `/jobs/{id}` — Match Assessment detail via `Assistant.load_match_assessment_page` (summary + Match Assessment + can_prepare + LLM Unavailable; no opportunistic rejudge; non-sticky **Signal Summary** with in-page anchors; independently collapsible **Signal Sections** (`details`/`summary`, all open on first load) for HC + reason + Hard Constraint Evidence, Preference + reason + Preference Evidence, Relevance + Relevance Evidence; signal-specific counterpart labels; Prepare / Delete after sections; Pending / LLM Unavailable clear without empty Signal Sections; no exclusive accordion / Override)
 - `/jobs/{id}/prepare` (POST) — Prepare with confirm pages for HC fail / overwrite
 - `/jobs/{id}/delete` (POST) — Delete with confirm naming posting / assessment / packet (if any)

@@ -14,6 +14,10 @@ from fastapi.templating import Jinja2Templates
 from job_finding_assistant.assistant import (
     AssessmentSummaryCatalog,
     Assistant,
+    BulkDeleteNeedsConfirm,
+    BulkDeleteResult,
+    BulkPrepareNeedsConfirm,
+    BulkPrepareResult,
     CandidateFilesView,
     CrawlFilters,
     CrawlOutcome,
@@ -72,6 +76,16 @@ class SupportsAssistantUi(Protocol):
 
     def delete(self, job_posting_id: str, *, confirm: bool = False) -> None:
         """Hard-remove Job Posting, Match Assessment, and Preparation Packet."""
+
+    def bulk_prepare(
+        self, job_posting_ids: list[str], *, confirm: bool = False
+    ) -> BulkPrepareResult:
+        """Bulk Prepare selected Assessment Summary rows."""
+
+    def bulk_delete(
+        self, job_posting_ids: list[str], *, confirm: bool = False
+    ) -> BulkDeleteResult:
+        """Bulk Delete selected Assessment Summary rows."""
 
     def get_candidate_files(self) -> CandidateFilesView:
         """Return paths, Candidate Snapshot, and path/read errors."""
@@ -150,12 +164,31 @@ def _parse_optional_date(raw: str) -> date | None:
     return date.fromisoformat(text)
 
 
+def _format_bulk_prepare_message(result: BulkPrepareResult) -> str:
+    if result.message:
+        return result.message
+    parts = [
+        f"Prepared {len(result.prepared)}",
+        f"skipped {len(result.skipped)}",
+        f"failed {len(result.failed)}",
+        f"stopped {len(result.stopped)}",
+    ]
+    return "Bulk Prepare: " + "; ".join(parts) + "."
+
+
+def _format_bulk_delete_message(result: BulkDeleteResult) -> str:
+    if result.message:
+        return result.message
+    return f"Bulk Delete: removed {len(result.deleted)}."
+
+
 def create_app(assistant: SupportsAssistantUi) -> FastAPI:
     """Build the local UI app wired to a single Assistant (or test double)."""
     app = FastAPI(title="Job Finding Assistant")
     app.state.assistant = assistant
     app.state.last_crawl_outcome = None
     app.state.prepare_error = None
+    app.state.bulk_message = None
     app.state.enrichment_error = None
 
     @app.get("/", response_class=HTMLResponse)
@@ -171,6 +204,8 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
             include_closed=show_closed,
             include_passed_deadlines=show_passed,
         )
+        bulk_message = request.app.state.bulk_message
+        request.app.state.bulk_message = None
         return _TEMPLATES.TemplateResponse(
             request,
             "assessment_summaries.html",
@@ -179,6 +214,7 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
                 "include_closed": show_closed,
                 "include_passed_deadlines": show_passed,
                 "prepare_error": request.app.state.prepare_error,
+                "bulk_message": bulk_message,
                 "llm_unavailable_reason": catalog.llm_unavailable_reason,
                 "processed_this_load": catalog.processed_this_load,
                 "pending_remaining": catalog.pending_remaining,
@@ -264,6 +300,55 @@ def create_app(assistant: SupportsAssistantUi) -> FastAPI:
                 },
                 status_code=200,
             )
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/bulk/prepare")
+    async def bulk_prepare_jobs(
+        request: Request,
+        confirm: str = Form("0"),
+    ) -> Response:
+        form = await request.form()
+        job_posting_ids = [str(value) for value in form.getlist("job_posting_ids")]
+        current = request.app.state.assistant
+        request.app.state.prepare_error = None
+        try:
+            result = current.bulk_prepare(
+                job_posting_ids, confirm=confirm == "1"
+            )
+        except BulkPrepareNeedsConfirm as exc:
+            return _TEMPLATES.TemplateResponse(
+                request,
+                "bulk_prepare_confirm.html",
+                {
+                    "items": exc.items,
+                    "selected_ids": exc.selected_ids,
+                    "skipped_ids": exc.skipped_ids,
+                },
+                status_code=200,
+            )
+        request.app.state.bulk_message = _format_bulk_prepare_message(result)
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.post("/bulk/delete")
+    async def bulk_delete_jobs(
+        request: Request,
+        confirm: str = Form("0"),
+    ) -> Response:
+        form = await request.form()
+        job_posting_ids = [str(value) for value in form.getlist("job_posting_ids")]
+        current = request.app.state.assistant
+        try:
+            result = current.bulk_delete(
+                job_posting_ids, confirm=confirm == "1"
+            )
+        except BulkDeleteNeedsConfirm as exc:
+            return _TEMPLATES.TemplateResponse(
+                request,
+                "bulk_delete_confirm.html",
+                {"items": exc.items},
+                status_code=200,
+            )
+        request.app.state.bulk_message = _format_bulk_delete_message(result)
         return RedirectResponse(url="/", status_code=303)
 
     @app.get("/jobs/{job_posting_id}/packet", response_class=HTMLResponse)

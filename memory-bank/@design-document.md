@@ -2,7 +2,7 @@
 
 Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0017`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary, Match Assessment detail (`/jobs/{id}` with **Signal Summary** + collapsible **Signal Sections** for Hard Constraint / Preference / Relevance Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests). Catalog **Bulk Prepare / Bulk Delete** and **LLM Run** activity UX decided (#22 / #23); **not implemented in UI yet**.
+**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary (row checkboxes + **Bulk Prepare** / **Bulk Delete**), Match Assessment detail (`/jobs/{id}` with **Signal Summary** + collapsible **Signal Sections** for Hard Constraint / Preference / Relevance Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests). **LLM Run** activity UX decided (#23); **not implemented in UI yet**.
 
 ## Primary seam
 
@@ -103,7 +103,7 @@ Implemented through `Assistant.prepare` / `load_preparation_packet_page` (UI) / 
 - Stale only when Master CV / HC file / Preferences file change; Stale packets stay readable with banner; Crawl detail does not Stale.
 - Tool-managed packet store (keyed by Job Posting); download PDF/YAML; Gap Report / Edit Summary UI-only in v1.
 - Delete confirms then hard-removes posting + assessment + packet (no trash/undo).
-- **Bulk Prepare / Bulk Delete** (catalog checkboxes): decided in docs (grill 2026-08-11); **not implemented in UI yet**. Parent after promotion from #17. Single-item Prepare/Delete remain on Match Assessment detail.
+- **Bulk Prepare / Bulk Delete** (catalog checkboxes): shipped via `Assistant.bulk_prepare` / `bulk_delete` + Assessment Summary UI (parent #22). Skips Pending / not-`can_prepare` with counts; one combined HC-fail + overwrite confirm (or immediate); sequential; stop rest on LLM Unavailable; continue after other Prepare failures. Bulk Delete one confirm listing assessment/packet presence, then sequential cascade. Single-item Prepare/Delete remain on Match Assessment detail.
 
 ## Scaffold slice (issue #2)
 
