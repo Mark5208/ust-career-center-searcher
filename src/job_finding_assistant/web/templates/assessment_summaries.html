@@ -58,6 +58,25 @@
         align-items: center;
         gap: 0.35rem;
       }
+      .bulk-bar {
+        margin: 1rem 0 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+      .bulk-bar label {
+        color: var(--muted);
+        font-size: 0.95rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .bulk-bar button {
+        font: inherit;
+        padding: 0.35rem 0.75rem;
+        cursor: pointer;
+      }
       .listing {
         list-style: none;
         padding: 0;
@@ -67,6 +86,10 @@
       .listing li {
         padding: 1rem 0;
         border-bottom: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.75rem;
+        align-items: start;
       }
       .listing .title {
         font-size: 1.05rem;
@@ -129,66 +152,71 @@
       {% if prepare_error %}
       <p class="empty">{{ prepare_error }}</p>
       {% endif %}
+      {% if bulk_message %}
+      <p class="empty">{{ bulk_message }}</p>
+      {% endif %}
       {% if rows %}
-      <ul class="listing">
-        {% for row in rows %}
-        <li>
-          <p class="title">
-            <a href="/jobs/{{ row.summary.job_posting_id }}">{{ row.summary.title }} — {{ row.summary.employer }}</a>
-          </p>
-          <p class="meta">
-            Listing: {{ row.summary.listing_status }} ·
-            Deadline: {{ row.summary.deadline_status }} ·
-            {% if row.summary.pending %}
-            Pending
-            {% else %}
-            Hard Constraint: {{ row.summary.hard_constraint_outcome }} ·
-            Preference: {{ row.summary.preference or "unknown" }} ·
-            Relevance: {{ row.summary.relevance }}
-            {% endif %}
-            {% if row.summary.has_preparation_packet %}
-            · Preparation Packet{% if row.summary.preparation_packet_stale %} (Stale){% endif %}
-            {% elif not row.summary.pending %}
-            · No Preparation Packet
-            {% endif %}
-          </p>
-          <p class="prepare">
-            <a href="/jobs/{{ row.summary.job_posting_id }}">View Match Assessment</a>
-            {% if row.summary.has_preparation_packet %}
-            ·
-            <a href="/jobs/{{ row.summary.job_posting_id }}/packet">View Preparation Packet</a>
-            {% if row.can_prepare %}
-            ·
-            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/prepare" style="display:inline">
-              <button type="submit">Re-Prepare</button>
-            </form>
-            {% else %}
-            · Prepare unavailable
-            {% endif %}
-            ·
-            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
-              <button type="submit">Delete</button>
-            </form>
-            {% elif not row.can_prepare %}
-            · Prepare unavailable
-            ·
-            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
-              <button type="submit">Delete</button>
-            </form>
-            {% else %}
-            ·
-            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/prepare" style="display:inline">
-              <button type="submit">Prepare</button>
-            </form>
-            ·
-            <form method="post" action="/jobs/{{ row.summary.job_posting_id }}/delete" style="display:inline">
-              <button type="submit">Delete</button>
-            </form>
-            {% endif %}
-          </p>
-        </li>
-        {% endfor %}
-      </ul>
+      <form id="bulk-form" method="post">
+        <div class="bulk-bar">
+          <label>
+            <input type="checkbox" id="select-all" />
+            Select all visible
+          </label>
+          <button type="submit" formaction="/bulk/prepare">Bulk Prepare</button>
+          <button type="submit" formaction="/bulk/delete">Bulk Delete</button>
+        </div>
+        <ul class="listing">
+          {% for row in rows %}
+          <li>
+            <input
+              type="checkbox"
+              name="job_posting_ids"
+              value="{{ row.summary.job_posting_id }}"
+              class="row-select"
+            />
+            <div>
+              <p class="title">
+                <a href="/jobs/{{ row.summary.job_posting_id }}">{{ row.summary.title }} — {{ row.summary.employer }}</a>
+              </p>
+              <p class="meta">
+                Listing: {{ row.summary.listing_status }} ·
+                Deadline: {{ row.summary.deadline_status }} ·
+                {% if row.summary.pending %}
+                Pending
+                {% else %}
+                Hard Constraint: {{ row.summary.hard_constraint_outcome }} ·
+                Preference: {{ row.summary.preference or "unknown" }} ·
+                Relevance: {{ row.summary.relevance }}
+                {% endif %}
+                {% if row.summary.has_preparation_packet %}
+                · Preparation Packet{% if row.summary.preparation_packet_stale %} (Stale){% endif %}
+                {% elif not row.summary.pending %}
+                · No Preparation Packet
+                {% endif %}
+              </p>
+              <p class="prepare">
+                <a href="/jobs/{{ row.summary.job_posting_id }}">View Match Assessment</a>
+                {% if row.summary.has_preparation_packet %}
+                ·
+                <a href="/jobs/{{ row.summary.job_posting_id }}/packet">View Preparation Packet</a>
+                {% endif %}
+              </p>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+      </form>
+      <script>
+        (function () {
+          var selectAll = document.getElementById("select-all");
+          if (!selectAll) return;
+          selectAll.addEventListener("change", function () {
+            document.querySelectorAll(".row-select").forEach(function (box) {
+              box.checked = selectAll.checked;
+            });
+          });
+        })();
+      </script>
       {% else %}
       <p class="empty">No Job Postings in the catalog yet.</p>
       {% endif %}

@@ -44,6 +44,12 @@ __all__ = [
     "AssessmentSummaryCatalog",
     "AssessmentSummaryCatalogRow",
     "Assistant",
+    "BulkDeleteConfirmItem",
+    "BulkDeleteNeedsConfirm",
+    "BulkDeleteResult",
+    "BulkPrepareConfirmItem",
+    "BulkPrepareNeedsConfirm",
+    "BulkPrepareResult",
     "CandidateFilesView",
     "CrawlFilters",
     "CrawlOutcome",
@@ -84,6 +90,73 @@ class DeleteNeedsConfirm(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class BulkPrepareConfirmItem:
+    """One eligible posting that needs Hard Constraint fail or overwrite confirm."""
+
+    job_posting_id: str
+    title: str
+    employer: str
+    kind: Literal["hard_constraint_fail", "overwrite"]
+    reason: str
+
+
+class BulkPrepareNeedsConfirm(Exception):
+    """Bulk Prepare needs one combined confirm before running the eligible set."""
+
+    def __init__(
+        self,
+        items: list[BulkPrepareConfirmItem],
+        *,
+        selected_ids: list[str],
+        eligible_ids: list[str],
+        skipped_ids: list[str],
+    ) -> None:
+        super().__init__("Bulk Prepare needs confirm")
+        self.items = list(items)
+        self.selected_ids = list(selected_ids)
+        self.eligible_ids = list(eligible_ids)
+        self.skipped_ids = list(skipped_ids)
+
+
+@dataclass(frozen=True)
+class BulkPrepareResult:
+    """Outcome of a Bulk Prepare run (prepared / skipped / failed / stopped)."""
+
+    prepared: list[str]
+    skipped: list[str]
+    failed: list[tuple[str, str]]
+    stopped: list[str]
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class BulkDeleteConfirmItem:
+    """One selected posting listed on the Bulk Delete confirm page."""
+
+    job_posting_id: str
+    title: str
+    employer: str
+    has_match_assessment: bool
+    has_preparation_packet: bool
+
+
+class BulkDeleteNeedsConfirm(Exception):
+    """Bulk Delete needs one confirm listing every selected posting."""
+
+    def __init__(self, items: list[BulkDeleteConfirmItem]) -> None:
+        super().__init__("Bulk Delete needs confirm")
+        self.items = list(items)
+
+
+@dataclass(frozen=True)
+class BulkDeleteResult:
+    """Outcome of a Bulk Delete run."""
+
+    deleted: list[str]
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -454,6 +527,158 @@ class Assistant:
             )
         self._packet_store.delete(job_posting_id)
         self._catalog_store.delete_job_posting(job_posting_id)
+
+    def bulk_prepare(
+        self,
+        job_posting_ids: list[str],
+        *,
+        confirm: bool = False,
+    ) -> BulkPrepareResult:
+        """Prepare every selected posting that can Prepare (ADR-0013 Bulk Prepare).
+
+        Skips Pending / not-ready rows. Raises BulkPrepareNeedsConfirm when any
+        eligible posting needs Hard Constraint fail or overwrite confirm, unless
+        ``confirm`` is True. Runs sequentially; stops remaining on LLM Unavailable;
+        continues after other Prepare failures.
+        """
+        selected = list(job_posting_ids)
+        if not selected:
+            return BulkPrepareResult(
+                prepared=[],
+                skipped=[],
+                failed=[],
+                stopped=[],
+                message="No Job Postings selected for Bulk Prepare.",
+            )
+
+        self._refresh_candidate_file_state()
+        eligible: list[str] = []
+        skipped: list[str] = []
+        for job_id in selected:
+            if self.can_prepare(job_id):
+                eligible.append(job_id)
+            else:
+                skipped.append(job_id)
+
+        if not confirm:
+            confirm_items = self._bulk_prepare_confirm_items(eligible)
+            if confirm_items:
+                raise BulkPrepareNeedsConfirm(
+                    confirm_items,
+                    selected_ids=selected,
+                    eligible_ids=eligible,
+                    skipped_ids=skipped,
+                )
+
+        prepared: list[str] = []
+        failed: list[tuple[str, str]] = []
+        stopped: list[str] = []
+        for index, job_id in enumerate(eligible):
+            try:
+                self.prepare(
+                    job_id,
+                    confirm_hard_constraint_fail=True,
+                    confirm_overwrite=True,
+                )
+            except PrepareFailedError as exc:
+                if self._is_llm_unavailable_prepare_failure(exc):
+                    failed.append((job_id, str(exc)))
+                    stopped.extend(eligible[index + 1 :])
+                    break
+                failed.append((job_id, str(exc)))
+                continue
+            prepared.append(job_id)
+        return BulkPrepareResult(
+            prepared=prepared,
+            skipped=skipped,
+            failed=failed,
+            stopped=stopped,
+        )
+
+    def _bulk_prepare_confirm_items(
+        self, eligible_ids: list[str]
+    ) -> list[BulkPrepareConfirmItem]:
+        items: list[BulkPrepareConfirmItem] = []
+        for job_id in eligible_ids:
+            posting = self._catalog_store.get_job_posting(job_id)
+            title = posting.title if posting is not None else job_id
+            employer = posting.employer if posting is not None else ""
+            assessment = self._catalog_store.get_match_assessment(job_id)
+            if assessment is None:
+                continue
+            if self._packet_store.get(job_id) is not None:
+                items.append(
+                    BulkPrepareConfirmItem(
+                        job_posting_id=job_id,
+                        title=title,
+                        employer=employer,
+                        kind="overwrite",
+                        reason="Re-Prepare will overwrite the current Preparation Packet",
+                    )
+                )
+            if assessment.hard_constraint_outcome == "fail":
+                items.append(
+                    BulkPrepareConfirmItem(
+                        job_posting_id=job_id,
+                        title=title,
+                        employer=employer,
+                        kind="hard_constraint_fail",
+                        reason=assessment.hard_constraint_reason,
+                    )
+                )
+        return items
+
+    def _is_llm_unavailable_prepare_failure(self, exc: PrepareFailedError) -> bool:
+        if isinstance(exc.__cause__, LlmUnavailableError):
+            return True
+        if not self._llm_cv_tailor.available():
+            return True
+        reason = self.get_llm_unavailable_reason()
+        return reason is not None and str(exc) == reason
+
+    def bulk_delete(
+        self,
+        job_posting_ids: list[str],
+        *,
+        confirm: bool = False,
+    ) -> BulkDeleteResult:
+        """Hard-delete every selected posting after one combined confirm (ADR-0013)."""
+        selected = list(job_posting_ids)
+        if not selected:
+            return BulkDeleteResult(
+                deleted=[],
+                message="No Job Postings selected for Bulk Delete.",
+            )
+
+        items: list[BulkDeleteConfirmItem] = []
+        for job_id in selected:
+            posting = self._catalog_store.get_job_posting(job_id)
+            if posting is None:
+                continue
+            items.append(
+                BulkDeleteConfirmItem(
+                    job_posting_id=job_id,
+                    title=posting.title or job_id,
+                    employer=posting.employer or "",
+                    has_match_assessment=(
+                        self._catalog_store.get_match_assessment(job_id) is not None
+                    ),
+                    has_preparation_packet=self._packet_store.get(job_id) is not None,
+                )
+            )
+        if not items:
+            return BulkDeleteResult(
+                deleted=[],
+                message="No Job Postings selected for Bulk Delete.",
+            )
+        if not confirm:
+            raise BulkDeleteNeedsConfirm(items)
+
+        deleted: list[str] = []
+        for item in items:
+            self.delete(item.job_posting_id, confirm=True)
+            deleted.append(item.job_posting_id)
+        return BulkDeleteResult(deleted=deleted)
 
     def set_master_cv_path(self, path: str) -> None:
         """Point at a Master CV RenderCV YAML file; never overwrites that file."""
