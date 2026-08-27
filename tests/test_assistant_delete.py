@@ -132,14 +132,16 @@ def test_delete_confirm_hard_removes_posting_assessment_and_packet(
 ) -> None:
     assistant = _ready_assistant(tmp_path)
     assistant.prepare("86534")
-    assert assistant.get_preparation_packet("86534") is not None
-    assert assistant.get_match_assessment("86534") is not None
+    assert assistant.load_preparation_packet_page("86534") is not None
+    page = assistant.load_match_assessment_page("86534")
+    assert page is not None
+    assert page.match_assessment is not None
 
     assistant.delete("86534", confirm=True)
 
-    assert assistant.list_assessment_summaries() == []
-    assert assistant.get_match_assessment("86534") is None
-    assert assistant.get_preparation_packet("86534") is None
+    assert assistant.load_assessment_summary_catalog().rows == []
+    assert assistant.load_match_assessment_page("86534") is None
+    assert assistant.load_preparation_packet_page("86534") is None
     assert assistant.get_tailored_yaml("86534") is None
 
 
@@ -147,7 +149,7 @@ def test_delete_without_packet_omits_packet_from_confirm_and_removes_posting(
     tmp_path: Path,
 ) -> None:
     assistant = _ready_assistant(tmp_path)
-    assert assistant.get_preparation_packet("86534") is None
+    assert assistant.load_preparation_packet_page("86534") is None
 
     with pytest.raises(DeleteNeedsConfirm) as exc_info:
         assistant.delete("86534")
@@ -156,8 +158,8 @@ def test_delete_without_packet_omits_packet_from_confirm_and_removes_posting(
 
     assistant.delete("86534", confirm=True)
 
-    assert assistant.list_assessment_summaries() == []
-    assert assistant.get_match_assessment("86534") is None
+    assert assistant.load_assessment_summary_catalog().rows == []
+    assert assistant.load_match_assessment_page("86534") is None
 
 
 def test_delete_while_pending_removes_posting(tmp_path: Path) -> None:
@@ -179,7 +181,9 @@ def test_delete_while_pending_removes_posting(tmp_path: Path) -> None:
     )
     assistant.set_master_cv_path(str(_write_cv(tmp_path)))
     assistant.run_crawl()
-    assert assistant.get_match_assessment("86534") is None
+    page = assistant.load_match_assessment_page("86534")
+    assert page is not None
+    assert page.match_assessment is None
 
     with pytest.raises(DeleteNeedsConfirm) as exc_info:
         assistant.delete("86534")
@@ -187,6 +191,9 @@ def test_delete_while_pending_removes_posting(tmp_path: Path) -> None:
     assert "Preparation Packet" not in exc_info.value.reason
 
     assistant.delete("86534", confirm=True)
-    assert assistant.list_assessment_summaries(
-        include_closed=True, include_passed_deadlines=True
-    ) == []
+    assert (
+        assistant.load_assessment_summary_catalog(
+            include_closed=True, include_passed_deadlines=True
+        ).rows
+        == []
+    )

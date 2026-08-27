@@ -1,5 +1,6 @@
 """In-memory fakes for Job Board / LLM / Master CV / constraint-file ports used in tests."""
 
+import threading
 import time
 from pathlib import Path
 
@@ -197,7 +198,11 @@ class FakeConstraintFilesStore:
 
 
 class FakeLlmJudge:
-    """Scripted three-signal judgments; records call inputs for isolation checks."""
+    """Scripted three-signal judgments; records call inputs for isolation checks.
+
+    Counters and scripted sequences are locked: catalog assess judges several Job
+    Postings at once, so unguarded increments would drop calls.
+    """
 
     def __init__(
         self,
@@ -242,6 +247,7 @@ class FakeLlmJudge:
         self._fail_on_call = fail_on_call
         self._fail_for_titles = set(fail_for_titles or ())
         self._delay_seconds = delay_seconds
+        self._call_lock = threading.Lock()
         self.judge_calls = 0
         self.hard_constraint_calls: list[dict[str, object]] = []
         self.preference_calls: list[dict[str, object]] = []
@@ -279,7 +285,8 @@ class FakeLlmJudge:
         if self._should_fail(job_detail_fields):
             self._raise_unavailable()
         self._maybe_delay()
-        self.judge_calls += 1
+        with self._call_lock:
+            self.judge_calls += 1
         self.hard_constraint_calls.append(
             {
                 "hard_constraints_text": hard_constraints_text,
@@ -301,18 +308,19 @@ class FakeLlmJudge:
         if self._should_fail(job_detail_fields):
             self._raise_unavailable()
         self._maybe_delay()
-        self.judge_calls += 1
         self.preference_calls.append(
             {
                 "preferences_text": preferences_text,
                 "job_detail_fields": dict(job_detail_fields),
             }
         )
-        if self._preferences is not None:
-            preference = self._preferences[self._preference_index]
-            self._preference_index += 1
-        else:
-            preference = self._preference
+        with self._call_lock:
+            self.judge_calls += 1
+            if self._preferences is not None:
+                preference = self._preferences[self._preference_index]
+                self._preference_index += 1
+            else:
+                preference = self._preference
         return PreferenceJudgment(
             preference=preference,
             reason=self._preference_reason,
@@ -328,18 +336,19 @@ class FakeLlmJudge:
         if self._should_fail(job_detail_fields):
             self._raise_unavailable()
         self._maybe_delay()
-        self.judge_calls += 1
         self.relevance_calls.append(
             {
                 "job_detail_fields": dict(job_detail_fields),
                 "candidate_snapshot": candidate_snapshot,
             }
         )
-        if self._relevances is not None:
-            relevance = self._relevances[self._relevance_index]
-            self._relevance_index += 1
-        else:
-            relevance = self._relevance
+        with self._call_lock:
+            self.judge_calls += 1
+            if self._relevances is not None:
+                relevance = self._relevances[self._relevance_index]
+                self._relevance_index += 1
+            else:
+                relevance = self._relevance
         return RelevanceJudgment(relevance=relevance, evidence=list(self._evidence))
 
 

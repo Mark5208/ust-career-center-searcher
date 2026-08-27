@@ -13,7 +13,7 @@ from job_finding_assistant.fakes import (
 )
 
 
-def test_assistant_lists_empty_assessment_summaries_when_catalog_has_no_job_postings(
+def test_assistant_catalog_load_is_empty_when_catalog_has_no_job_postings(
     tmp_path: Path,
 ) -> None:
     catalog_store = CatalogStore(tmp_path / "catalog.db")
@@ -26,6 +26,6 @@ def test_assistant_lists_empty_assessment_summaries_when_catalog_has_no_job_post
         constraint_files=FakeConstraintFilesStore(),
     )
 
-    summaries = assistant.list_assessment_summaries()
+    catalog = assistant.load_assessment_summary_catalog()
 
-    assert summaries == []
+    assert catalog.rows == []
