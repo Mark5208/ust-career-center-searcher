@@ -49,7 +49,7 @@ _Avoid_: archive, hide, soft-delete
 ### Candidate
 
 **Candidate files**:
-The in-app surface for the user-chosen Master CV, Hard Constraints file, and Preferences file paths.
+The grouped Master CV, Hard Constraints file, and Preferences file paths the user sets.
 _Avoid_: settings, candidate page (when meaning this), Candidate Snapshot, path pointer
 
 **Master CV**:
@@ -65,7 +65,6 @@ The user-invoked, job-agnostic HITL skill family for changing the Master CV — 
 _Avoid_: Enrichment (for this), CV chat, YAML editor, experience mining, JD-steered interview, session (for this), Authoring session
 
 **Sitting**:
-One Master CV Authoring invoke through abort or one Authoring write protocol confirm — possibly several Slices, one Master CV write. Not a Master CV Enrichment session.
 From the first Master CV Authoring `/name` in a conversation through abort or one Authoring write protocol confirm — possibly several Slices and further typed leaf `/name`s in that conversation, one Master CV write. A new conversation is a new Sitting. Not a Master CV Enrichment session.
 _Avoid_: session, Authoring session, chat, Enrichment session (for this), eval Sitting (as a type)
 
