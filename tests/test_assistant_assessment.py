@@ -118,10 +118,11 @@ def test_crawl_leaves_assessments_pending_until_rejudge(tmp_path: Path) -> None:
 
     assert outcome.status == "completed"
     assert outcome.stored_count == 1
-    summary = assistant.list_assessment_summaries()[0]
+    catalog = assistant.load_assessment_summary_catalog()
+    summary = catalog.rows[0].summary
     assert summary.pending is True
     assert judge.judge_calls == 0
-    assert assistant.can_prepare(summary.job_posting_id) is False
+    assert catalog.rows[0].can_prepare is False
 
 
 def test_rejudge_builds_three_signal_assessment_with_empty_constraint_files(
@@ -132,16 +133,18 @@ def test_rejudge_builds_three_signal_assessment_with_empty_constraint_files(
 
     assistant.rejudge_pending_assessments()
 
-    summary = assistant.list_assessment_summaries()[0]
+    catalog = assistant.load_assessment_summary_catalog()
+    summary = catalog.rows[0].summary
     assert summary.pending is False
     assert summary.hard_constraint_outcome == "unknown"
     assert summary.preference is None
     assert summary.relevance == "Strong"
-    assert assistant.can_prepare(summary.job_posting_id) is True
-    detail = assistant.get_match_assessment(summary.job_posting_id)
-    assert detail is not None
-    assert detail.hard_constraint_reason
-    assert detail.evidence
+    assert catalog.rows[0].can_prepare is True
+    page = assistant.load_match_assessment_page(summary.job_posting_id)
+    assert page is not None
+    assert page.match_assessment is not None
+    assert page.match_assessment.hard_constraint_reason
+    assert page.match_assessment.evidence
     assert len(judge.hard_constraint_calls) == 0
     assert len(judge.preference_calls) == 0
     assert len(judge.relevance_calls) == 1
@@ -170,7 +173,8 @@ def test_rejudge_pending_assessments_budgets_one_posting_per_call(tmp_path: Path
     assistant.rejudge_pending_assessments()
 
     summaries = {
-        row.job_posting_id: row for row in assistant.list_assessment_summaries()
+        row.summary.job_posting_id: row.summary
+        for row in assistant.load_assessment_summary_catalog().rows
     }
     assert len(summaries) == 2
     pending_count = sum(1 for row in summaries.values() if row.pending)
@@ -180,7 +184,10 @@ def test_rejudge_pending_assessments_budgets_one_posting_per_call(tmp_path: Path
     assert judge.judge_calls == 1
 
     assistant.rejudge_pending_assessments()
-    assert all(not row.pending for row in assistant.list_assessment_summaries())
+    assert all(
+        not row.summary.pending
+        for row in assistant.load_assessment_summary_catalog().rows
+    )
     assert judge.judge_calls == 2
 
 
@@ -251,12 +258,15 @@ def test_rejudge_does_not_starve_later_pending_when_head_fails(tmp_path: Path) -
     assistant.rejudge_pending_assessments()
     assistant.rejudge_pending_assessments()
 
-    by_id = {row.job_posting_id: row for row in assistant.list_assessment_summaries()}
-    assert by_id["85904"].pending is True
-    assert assistant.can_prepare("85904") is False
-    assert by_id["86497"].pending is False
-    assert assistant.can_prepare("86497") is True
-    assert assistant.get_match_assessment("86497") is not None
+    catalog = assistant.load_assessment_summary_catalog()
+    by_id = {row.summary.job_posting_id: row for row in catalog.rows}
+    assert by_id["85904"].summary.pending is True
+    assert by_id["85904"].can_prepare is False
+    assert by_id["86497"].summary.pending is False
+    assert by_id["86497"].can_prepare is True
+    page = assistant.load_match_assessment_page("86497")
+    assert page is not None
+    assert page.match_assessment is not None
     reason = assistant.get_llm_unavailable_reason()
     assert reason is not None
     assert reason.startswith("LLM Unavailable:")
@@ -283,7 +293,7 @@ def test_non_empty_constraint_files_invoke_llm_with_input_isolation(
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    summary = assistant.list_assessment_summaries()[0]
+    summary = assistant.load_assessment_summary_catalog().rows[0].summary
     assert summary.pending is False
     assert summary.hard_constraint_outcome == "pass"
     assert summary.preference == "Strong"
@@ -345,11 +355,12 @@ def test_rejudge_persists_hard_constraint_and_preference_evidence(
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    detail = assistant.get_match_assessment("86534")
-    assert detail is not None
-    assert detail.hard_constraint_evidence == hc_evidence
-    assert detail.preference_evidence == preference_evidence
-    assert detail.evidence == relevance_evidence
+    page = assistant.load_match_assessment_page("86534")
+    assert page is not None
+    assert page.match_assessment is not None
+    assert page.match_assessment.hard_constraint_evidence == hc_evidence
+    assert page.match_assessment.preference_evidence == preference_evidence
+    assert page.match_assessment.evidence == relevance_evidence
 
 
 def test_rejudge_keeps_empty_constraint_evidence_when_files_empty(
@@ -377,13 +388,14 @@ def test_rejudge_keeps_empty_constraint_evidence_when_files_empty(
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    detail = assistant.get_match_assessment("86534")
-    assert detail is not None
-    assert detail.hard_constraint_outcome == "unknown"
-    assert detail.preference is None
-    assert detail.hard_constraint_evidence == []
-    assert detail.preference_evidence == []
-    assert detail.evidence
+    page = assistant.load_match_assessment_page("86534")
+    assert page is not None
+    assert page.match_assessment is not None
+    assert page.match_assessment.hard_constraint_outcome == "unknown"
+    assert page.match_assessment.preference is None
+    assert page.match_assessment.hard_constraint_evidence == []
+    assert page.match_assessment.preference_evidence == []
+    assert page.match_assessment.evidence
 
 
 def test_pre_upgrade_complete_assessment_loads_empty_constraint_evidence(
@@ -448,8 +460,9 @@ def test_prepare_available_when_hard_constraint_fails(tmp_path: Path) -> None:
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    assert assistant.list_assessment_summaries()[0].hard_constraint_outcome == "fail"
-    assert assistant.can_prepare("86534") is True
+    catalog = assistant.load_assessment_summary_catalog()
+    assert catalog.rows[0].summary.hard_constraint_outcome == "fail"
+    assert catalog.rows[0].can_prepare is True
 
 
 def test_assessment_stays_pending_when_llm_judge_unavailable(tmp_path: Path) -> None:
@@ -459,9 +472,10 @@ def test_assessment_stays_pending_when_llm_judge_unavailable(tmp_path: Path) -> 
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    summary = assistant.list_assessment_summaries()[0]
+    catalog = assistant.load_assessment_summary_catalog()
+    summary = catalog.rows[0].summary
     assert summary.pending is True
-    assert assistant.can_prepare(summary.job_posting_id) is False
+    assert catalog.rows[0].can_prepare is False
     assert assistant.get_llm_unavailable_reason() == "LLM Unavailable: Fake judge disabled"
 
 
@@ -477,7 +491,7 @@ def test_judge_failure_leaves_pending_without_half_assessment(tmp_path: Path) ->
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    assert assistant.list_assessment_summaries()[0].pending is True
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is True
     assert assistant.get_llm_unavailable_reason() == "LLM Unavailable: Fake judge failed"
 
 
@@ -517,6 +531,14 @@ def test_assistant_does_not_expose_public_refresh_candidate_file_state() -> None
     assert not hasattr(Assistant, "refresh_candidate_file_state")
 
 
+def test_assistant_does_not_expose_leftover_list_get_prepare_reads() -> None:
+    """Public reads are page loads; leftover list/get/can_prepare/packet helpers are gone."""
+    assert not hasattr(Assistant, "list_assessment_summaries")
+    assert not hasattr(Assistant, "get_match_assessment")
+    assert not hasattr(Assistant, "can_prepare")
+    assert not hasattr(Assistant, "get_preparation_packet")
+
+
 def test_fingerprint_change_marks_all_assessments_pending(tmp_path: Path) -> None:
     prefs_path = tmp_path / "prefs.txt"
     prefs_path.write_text("Prefer remote\n", encoding="utf-8")
@@ -528,14 +550,14 @@ def test_fingerprint_change_marks_all_assessments_pending(tmp_path: Path) -> Non
     assistant.set_preferences_path(str(prefs_path))
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
-    assert assistant.list_assessment_summaries()[0].pending is False
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is False
 
     prefs_path.write_text("Prefer on-site Hong Kong\n", encoding="utf-8")
 
-    assert assistant.list_assessment_summaries()[0].pending is True
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is True
     assistant.rejudge_pending_assessments()
-    assert assistant.list_assessment_summaries()[0].pending is False
-    assert assistant.list_assessment_summaries()[0].preference == "Strong"
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is False
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.preference == "Strong"
 
 
 def test_master_cv_yaml_content_change_marks_all_assessments_pending(
@@ -545,14 +567,14 @@ def test_master_cv_yaml_content_change_marks_all_assessments_pending(
     assistant, _ = _crawl_with_master_cv(tmp_path)
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
-    assert assistant.list_assessment_summaries()[0].pending is False
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is False
 
     cv_path.write_text(
         _SAMPLE_CV.replace("Platform engineer", "Staff platform engineer"),
         encoding="utf-8",
     )
 
-    assert assistant.list_assessment_summaries()[0].pending is True
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is True
     snapshot = assistant.get_candidate_files().snapshot
     assert "Staff platform engineer" in (
         snapshot.experience[0] if snapshot else ""
@@ -571,11 +593,11 @@ def test_path_clear_marks_all_assessments_pending(tmp_path: Path) -> None:
     assistant.set_preferences_path(str(prefs_path))
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
-    assert assistant.list_assessment_summaries()[0].pending is False
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is False
 
     assistant.clear_preferences_path()
 
-    assert assistant.list_assessment_summaries()[0].pending is True
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is True
 
 
 def test_invalid_master_cv_yaml_keeps_relevance_pending_with_error(
@@ -599,10 +621,10 @@ def test_invalid_master_cv_yaml_keeps_relevance_pending_with_error(
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    summaries = assistant.list_assessment_summaries()
-    assert len(summaries) == 1
-    assert summaries[0].pending is True
-    assert assistant.can_prepare(summaries[0].job_posting_id) is False
+    catalog = assistant.load_assessment_summary_catalog()
+    assert len(catalog.rows) == 1
+    assert catalog.rows[0].summary.pending is True
+    assert catalog.rows[0].can_prepare is False
     files = assistant.get_candidate_files()
     assert files.snapshot is None
     assert any("Master CV" in error for error in files.errors)
@@ -626,7 +648,7 @@ def test_unreadable_master_cv_keeps_relevance_pending_with_error(tmp_path: Path)
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    assert assistant.list_assessment_summaries()[0].pending is True
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.pending is True
     files = assistant.get_candidate_files()
     assert files.snapshot is None
     assert any("Master CV" in error for error in files.errors)
@@ -642,7 +664,7 @@ def test_unreadable_hard_constraints_path_is_unknown_not_pending(
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
 
-    summary = assistant.list_assessment_summaries()[0]
+    summary = assistant.load_assessment_summary_catalog().rows[0].summary
     assert summary.pending is False
     assert summary.hard_constraint_outcome == "unknown"
     assert summary.relevance == "Strong"
@@ -673,8 +695,9 @@ def test_crawl_detail_change_marks_pending_without_staling_packets(
     assistant.set_master_cv_path(str(cv_path))
     assistant.run_crawl()
     assistant.rejudge_pending_assessments()
-    assert assistant.list_assessment_summaries()[0].relevance == "Weak"
-    assert assistant.list_assessment_summaries()[0].preparation_packet_stale is False
+    catalog = assistant.load_assessment_summary_catalog()
+    assert catalog.rows[0].summary.relevance == "Weak"
+    assert catalog.rows[0].summary.preparation_packet_stale is False
 
     changed_entry = JobListEntry(
         id=entry.id,
@@ -704,14 +727,14 @@ def test_crawl_detail_change_marks_pending_without_staling_packets(
     )
 
     assistant.run_crawl()
-    summary = assistant.list_assessment_summaries()[0]
+    summary = assistant.load_assessment_summary_catalog().rows[0].summary
     assert summary.title == "Senior System Engineer"
     assert summary.pending is True
     assert summary.preparation_packet_stale is False
     assert judge2.judge_calls == 0
 
     assistant.rejudge_pending_assessments()
-    assert assistant.list_assessment_summaries()[0].relevance == "Strong"
+    assert assistant.load_assessment_summary_catalog().rows[0].summary.relevance == "Strong"
 
 
 def test_default_filter_hides_closed_and_passed_deadline(tmp_path: Path) -> None:
@@ -778,14 +801,19 @@ def test_default_filter_hides_closed_and_passed_deadline(tmp_path: Path) -> None
     )
     assert assistant.run_crawl().status == "completed"
 
-    default_ids = {row.job_posting_id for row in assistant.list_assessment_summaries()}
+    default_ids = {
+        row.summary.job_posting_id
+        for row in assistant.load_assessment_summary_catalog().rows
+    }
     with_closed = {
-        row.job_posting_id
-        for row in assistant.list_assessment_summaries(include_closed=True)
+        row.summary.job_posting_id
+        for row in assistant.load_assessment_summary_catalog(include_closed=True).rows
     }
     with_passed = {
-        row.job_posting_id
-        for row in assistant.list_assessment_summaries(include_passed_deadlines=True)
+        row.summary.job_posting_id
+        for row in assistant.load_assessment_summary_catalog(
+            include_passed_deadlines=True
+        ).rows
     }
 
     assert default_ids == {"open-upcoming", "open-unknown"}
@@ -801,7 +829,7 @@ def test_default_sort_preference_then_relevance_deadline_unknown_last(
             id="weak-pref-strong-rel",
             title="weak-pref-strong-rel",
             employer="Acme",
-            application_deadline="2026-08-25",
+            application_deadline="2026-09-20",
         ),
         JobListEntry(
             id="strong-pref-later",
@@ -825,7 +853,7 @@ def test_default_sort_preference_then_relevance_deadline_unknown_last(
             id="fail-strong",
             title="fail-strong",
             employer="Acme",
-            application_deadline="2026-08-20",
+            application_deadline="2026-09-15",
         ),
     ]
     details = {
@@ -890,7 +918,7 @@ def test_default_sort_preference_then_relevance_deadline_unknown_last(
         id="pending",
         title="pending",
         employer="Acme",
-        application_deadline="2026-08-15",
+        application_deadline="2026-09-15",
     )
     job_board.set_list_entries([*assessed_entries, pending_entry])
     pending_assistant = _assistant(
@@ -902,7 +930,10 @@ def test_default_sort_preference_then_relevance_deadline_unknown_last(
     )
     assert pending_assistant.run_crawl().stored_count == 1
 
-    ids = [row.job_posting_id for row in pending_assistant.list_assessment_summaries()]
+    ids = [
+        row.summary.job_posting_id
+        for row in pending_assistant.load_assessment_summary_catalog().rows
+    ]
 
     assert ids == [
         "strong-pref-soon",

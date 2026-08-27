@@ -11,3 +11,6 @@ build/
 venv/
 *.db
 .DS_Store
+
+# Personal candidate materials (never commit)
+private/
