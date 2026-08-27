@@ -1,8 +1,8 @@
 # Design document — Job Finding Assistant
 
-Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0017`. Parent spec: GitHub issue #1.
+Authoritative product language: `CONTEXT.md`. Scope ADRs: `docs/adr/0001`–`0018`. Parent spec: GitHub issue #1.
 
-**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary (row checkboxes + **Bulk Prepare** / **Bulk Delete** + **LLM Run** activity UX: explicit catalog assess / Bulk Prepare as process-local run with status poll + Stop), Match Assessment detail (`/jobs/{id}` with **Signal Summary** + collapsible **Signal Sections** for Hard Constraint / Preference / Relevance Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests).
+**Docs vs code:** ADRs 0005–0017 Prepare/assessment/CV/LLM/Enrichment slices through `Assistant` are implemented for Assessment Summary (row checkboxes + **Bulk Prepare** / **Bulk Delete** + **LLM Run** activity UX: explicit catalog assess / Bulk Prepare as process-local run with status poll + Stop), Match Assessment detail (`/jobs/{id}` with **Signal Summary** + collapsible **Signal Sections** for Hard Constraint / Preference / Relevance Evidence + short reasons), Master CV Snapshot + **Master CV Enrichment** (`/candidate/enrichment`), constraint files, Crawl, Preparation Packets (Gap Report / Edit Summary / Tailored YAML / PDF / Stale), Delete cascade, and live OpenAI-compatible `LlmJudge` / `LlmCvTailor` / `LlmCvEnricher` (env key; Unavailable when missing; Fake only in tests). Master CV Authoring is the skill family on disk (ADR-0018), not an Assistant slice.
 
 ## Primary seam
 
