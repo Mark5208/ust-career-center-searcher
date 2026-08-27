@@ -48,6 +48,10 @@ _Avoid_: archive, hide, soft-delete
 
 ### Candidate
 
+**Candidate files**:
+The grouped Master CV, Hard Constraints file, and Preferences file paths the user sets.
+_Avoid_: settings, candidate page (when meaning this), Candidate Snapshot, path pointer
+
 **Master CV**:
 The user-owned full experience dossier as RenderCV YAML on disk — may be longer than an apply-sized CV. Typography and PDF output are delegated to RenderCV; the user focuses on content. The in-app tool may write this file only on explicit Master CV Enrichment session confirm; Master CV Authoring may also write it on Authoring write protocol confirm. Prepare and the tailor never overwrite it. Unreadable or invalid YAML yields no usable Candidate Snapshot (Relevance stays Pending) with a clear error — rules: ADR-0014. Enrichment: ADR-0017. Authoring: ADR-0018.
 _Avoid_: resume, profile, base CV, LaTeX Master CV, shadow dossier
@@ -61,23 +65,31 @@ The user-invoked, job-agnostic HITL skill family for changing the Master CV — 
 _Avoid_: Enrichment (for this), CV chat, YAML editor, experience mining, JD-steered interview, session (for this), Authoring session
 
 **Sitting**:
-One Master CV Authoring invoke through abort or one Authoring write protocol confirm — possibly several Slices, one Master CV write. Not a Master CV Enrichment session.
-_Avoid_: session, Authoring session, chat, Enrichment session (for this)
+From the first Master CV Authoring `/name` in a conversation through abort or one Authoring write protocol confirm — possibly several Slices and further typed leaf `/name`s in that conversation, one Master CV write. A new conversation is a new Sitting. Not a Master CV Enrichment session.
+_Avoid_: session, Authoring session, chat, Enrichment session (for this), eval Sitting (as a type)
+
+**Sitting met**:
+Eval verdict that one Master CV Authoring Sitting satisfied the sandbox-eval rubric. Not a Hard Constraint outcome.
+_Avoid_: pass (for this), Sitting pass, eval Sitting (as a type)
+
+**Sitting missed**:
+Eval verdict that one Master CV Authoring Sitting did not satisfy the sandbox-eval rubric. Not a Hard Constraint outcome.
+_Avoid_: fail (for this), Sitting fail
 
 **Slice**:
 The user-nominated scope of one content-interview or design-pins interview inside a Sitting. The interview stops when that request is filled, not when the Master CV is complete.
 _Avoid_: session scope, audit, full CV review, Enrichment session
 
 **Authoring write protocol**:
-The confirm-and-write ritual that ends a non-empty Sitting: explicit chat confirm, then one atomic write of the configured Master CV — not a Master CV Enrichment session write. Rules: ADR-0018.
+The confirm-and-write ritual that ends a non-empty Sitting: explicit chat confirm, then one atomic write of the configured Master CV (the Master CV path on Candidate files) — not a Master CV Enrichment session write. Rules: ADR-0018.
 _Avoid_: Enrichment confirm, Assistant, patch, session write, Prepare, Write protocol (bare)
 
 **Hard Constraints file**:
-A user-authored plain-text file of non-negotiable terms (path set like the Master CV; tool reads only). Empty or missing means no Hard Constraints to check. Path set but unreadable yields unknown for that signal plus a path/read error (not Pending) — rules: ADR-0014.
+A user-authored plain-text file of non-negotiable terms (path set on Candidate files; tool reads only). Empty or missing means no Hard Constraints to check. Path set but unreadable yields unknown for that signal plus a path/read error (not Pending) — rules: ADR-0014.
 _Avoid_: preferences file (for this), must-haves config, deal-breaker form
 
 **Preferences file**:
-A user-authored plain-text file of soft priorities — what the user likes to have but does not require (path set like the Master CV; tool reads only). Empty or missing means no soft priorities to score. Path set but unreadable yields unknown for that signal plus a path/read error (not Pending). Not Crawl Filters and not Hard Constraints — rules: ADR-0014.
+A user-authored plain-text file of soft priorities — what the user likes to have but does not require (path set on Candidate files; tool reads only). Empty or missing means no soft priorities to score. Path set but unreadable yields unknown for that signal plus a path/read error (not Pending). Not Crawl Filters and not Hard Constraints — rules: ADR-0014.
 _Avoid_: settings, user config, hard constraints file, relevance input (alone)
 
 **Candidate Snapshot**:

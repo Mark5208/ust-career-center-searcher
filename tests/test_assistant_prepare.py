@@ -167,10 +167,10 @@ def test_prepare_builds_packet_with_gap_report_edit_summary_yaml_and_pdf(
     assert "platform services" in packet.tailored_yaml
     assert tailor.tailor_calls == 1
     assert renderer.render_calls == 1
-    summary = assistant.list_assessment_summaries()[0]
+    summary = assistant.load_assessment_summary_catalog().rows[0].summary
     assert summary.has_preparation_packet is True
     assert summary.preparation_packet_stale is False
-    stored = assistant.get_preparation_packet("86534")
+    stored = assistant.load_preparation_packet_page("86534")
     assert stored is not None
     assert stored.match_assessment is not None
     assert stored.match_assessment.relevance == "Strong"
@@ -205,9 +205,9 @@ def test_prepare_allowed_for_closed_and_deadline_passed(tmp_path: Path) -> None:
     assistant, _, _, job_board = _ready_assistant(tmp_path, deadline="2020-01-01")
     job_board.set_list_entries([])
     assistant.run_crawl()
-    closed = assistant.list_assessment_summaries(
+    closed = assistant.load_assessment_summary_catalog(
         include_closed=True, include_passed_deadlines=True
-    )[0]
+    ).rows[0].summary
     assert closed.listing_status == "Closed"
     assert closed.deadline_status == "Passed"
 
@@ -265,7 +265,7 @@ def test_tailor_failure_leaves_prior_packet_untouched(tmp_path: Path) -> None:
     assert str(failed.value) == "LLM Unavailable: Fake tailor failed"
     assert assistant.get_llm_unavailable_reason() == "LLM Unavailable: Fake tailor failed"
 
-    stored = assistant.get_preparation_packet("86534")
+    stored = assistant.load_preparation_packet_page("86534")
     assert stored is not None
     assert stored.packet.tailored_yaml == prior_yaml
     assert stored.packet.stale is False
@@ -283,7 +283,12 @@ def test_pdf_only_failure_keeps_packet_without_pdf(tmp_path: Path) -> None:
     assert packet.gap_report.items
     assert packet.tailored_yaml
     assert assistant.get_tailored_pdf("86534") is None
-    assert assistant.list_assessment_summaries()[0].has_preparation_packet is True
+    assert (
+        assistant.load_assessment_summary_catalog()
+        .rows[0]
+        .summary.has_preparation_packet
+        is True
+    )
     # Renderer's own failure message is surfaced, not discarded (ADR-0013 revisit).
     assert packet.pdf_missing_reasons == ("FakePdfRenderer failed",)
 
@@ -356,14 +361,21 @@ def test_prepare_keeps_packet_without_pdf_when_retry_still_invalid(
     assert packet.pdf_missing_reasons
     assert any("company" in reason for reason in packet.pdf_missing_reasons)
     assert not any("position" in reason for reason in packet.pdf_missing_reasons)
-    assert assistant.list_assessment_summaries()[0].has_preparation_packet is True
+    assert (
+        assistant.load_assessment_summary_catalog()
+        .rows[0]
+        .summary.has_preparation_packet
+        is True
+    )
     assert assistant.get_tailored_pdf("86534") is None
 
 
 def test_master_cv_change_marks_packet_stale_but_readable(tmp_path: Path) -> None:
     assistant, _, _, _ = _ready_assistant(tmp_path)
     assistant.prepare("86534")
-    assert assistant.list_assessment_summaries()[0].preparation_packet_stale is False
+    assert assistant.load_assessment_summary_catalog().rows[
+        0
+    ].summary.preparation_packet_stale is False
 
     new_cv = _write_cv(
         tmp_path,
@@ -372,15 +384,15 @@ def test_master_cv_change_marks_packet_stale_but_readable(tmp_path: Path) -> Non
     )
     assistant.set_master_cv_path(str(new_cv))
 
-    summaries = assistant.list_assessment_summaries()
-    assert summaries[0].pending is True
-    assert summaries[0].has_preparation_packet is True
-    assert summaries[0].preparation_packet_stale is True
-    view = assistant.get_preparation_packet("86534")
-    assert view is not None
-    assert view.packet.stale is True
-    assert view.packet.tailored_yaml
-    assert view.packet.gap_report.items
+    catalog = assistant.load_assessment_summary_catalog()
+    assert catalog.rows[0].summary.pending is True
+    assert catalog.rows[0].summary.has_preparation_packet is True
+    assert catalog.rows[0].summary.preparation_packet_stale is True
+    page = assistant.load_preparation_packet_page("86534")
+    assert page is not None
+    assert page.packet.stale is True
+    assert page.packet.tailored_yaml
+    assert page.packet.gap_report.items
 
 
 def test_hard_constraints_and_preferences_change_mark_packet_stale(
@@ -393,25 +405,25 @@ def test_hard_constraints_and_preferences_change_mark_packet_stale(
     hc_path = tmp_path / "hard.txt"
     hc_path.write_text("Must be Hong Kong based\n", encoding="utf-8")
     assistant.set_hard_constraints_path(str(hc_path))
-    view = assistant.get_preparation_packet("86534")
-    assert view is not None
-    assert view.packet.stale is True
+    page = assistant.load_preparation_packet_page("86534")
+    assert page is not None
+    assert page.packet.stale is True
 
     assistant.rejudge_pending_assessments()
     assistant.prepare("86534", confirm_overwrite=True)
     prefs_path = tmp_path / "prefs.txt"
     prefs_path.write_text("Prefer fintech\n", encoding="utf-8")
     assistant.set_preferences_path(str(prefs_path))
-    view = assistant.get_preparation_packet("86534")
-    assert view is not None
-    assert view.packet.stale is True
+    page = assistant.load_preparation_packet_page("86534")
+    assert page is not None
+    assert page.packet.stale is True
 
     assistant.rejudge_pending_assessments()
     assistant.prepare("86534", confirm_overwrite=True)
     assistant.clear_preferences_path()
-    view = assistant.get_preparation_packet("86534")
-    assert view is not None
-    assert view.packet.stale is True
+    page = assistant.load_preparation_packet_page("86534")
+    assert page is not None
+    assert page.packet.stale is True
 
 
 def test_crawl_detail_change_does_not_stale_packet(tmp_path: Path) -> None:
@@ -463,13 +475,13 @@ def test_crawl_detail_change_does_not_stale_packet(tmp_path: Path) -> None:
     job_board.set_details({changed_detail.id: changed_detail})
 
     assistant.run_crawl()
-    view = assistant.get_preparation_packet("86534")
-    assert view is not None
-    assert view.packet.stale is False
+    page = assistant.load_preparation_packet_page("86534")
+    assert page is not None
+    assert page.packet.stale is False
     summary = next(
-        row
-        for row in assistant.list_assessment_summaries(include_closed=True)
-        if row.job_posting_id == "86534"
+        row.summary
+        for row in assistant.load_assessment_summary_catalog(include_closed=True).rows
+        if row.summary.job_posting_id == "86534"
     )
     assert summary.pending is True
     assert summary.has_preparation_packet is True

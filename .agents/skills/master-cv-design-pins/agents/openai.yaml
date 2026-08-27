@@ -1,0 +1,5 @@
+interface:
+  display_name: "Master CV Design Pins"
+  short_description: "Gap-fill a user-nominated Slice of Master CV design and pins, then write on confirm."
+policy:
+  allow_implicit_invocation: false

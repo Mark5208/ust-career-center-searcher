@@ -1,5 +1,6 @@
 """Assistant seam: Bulk Prepare and Bulk Delete on Assessment Summary selection."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,8 @@ from job_finding_assistant.assistant import (
     Assistant,
     BulkDeleteNeedsConfirm,
     BulkPrepareNeedsConfirm,
+    BulkPrepareResult,
+    LlmRunStatus,
 )
 from job_finding_assistant.catalog_store import CatalogStore, JobPosting
 from job_finding_assistant.fakes import (
@@ -136,6 +139,34 @@ def _assistant(
     return assistant, tailor
 
 
+def _wait_llm_run_idle(assistant: Assistant, *, timeout: float = 5.0) -> LlmRunStatus:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = assistant.get_llm_run_status()
+        if not status.active:
+            return status
+        time.sleep(0.01)
+    raise TimeoutError("LLM Run did not finish")
+
+
+def _run_bulk_prepare(
+    assistant: Assistant,
+    job_posting_ids: list[str],
+    *,
+    confirm: bool = False,
+) -> BulkPrepareResult:
+    status = assistant.start_bulk_prepare_llm_run(job_posting_ids, confirm=confirm)
+    if status.active:
+        status = _wait_llm_run_idle(assistant)
+    return status.bulk_prepare_result or BulkPrepareResult(
+        prepared=[],
+        skipped=[],
+        failed=[],
+        stopped=[],
+        message=status.message,
+    )
+
+
 def test_bulk_prepare_skips_pending_and_runs_eligible_immediately(
     tmp_path: Path,
 ) -> None:
@@ -148,25 +179,28 @@ def test_bulk_prepare_skips_pending_and_runs_eligible_immediately(
         ],
         rejudge_count=2,
     )
-    assert assistant.get_match_assessment("86534") is not None
-    assert assistant.get_match_assessment("86535") is not None
-    assert assistant.get_match_assessment("86536") is None
+    assessed_a = assistant.load_match_assessment_page("86534")
+    assessed_b = assistant.load_match_assessment_page("86535")
+    pending = assistant.load_match_assessment_page("86536")
+    assert assessed_a is not None and assessed_a.match_assessment is not None
+    assert assessed_b is not None and assessed_b.match_assessment is not None
+    assert pending is not None and pending.match_assessment is None
 
-    result = assistant.bulk_prepare(["86534", "86535", "86536"])
+    result = _run_bulk_prepare(assistant, ["86534", "86535", "86536"])
 
     assert result.prepared == ["86534", "86535"]
     assert result.skipped == ["86536"]
     assert result.failed == []
     assert result.stopped == []
     assert tailor.tailor_calls == 2
-    assert assistant.get_preparation_packet("86534") is not None
-    assert assistant.get_preparation_packet("86535") is not None
+    assert assistant.load_preparation_packet_page("86534") is not None
+    assert assistant.load_preparation_packet_page("86535") is not None
 
 
 def test_bulk_prepare_empty_selection_is_noop_with_message(tmp_path: Path) -> None:
     assistant, tailor = _assistant(tmp_path, [_posting("86534", "System Engineer")])
 
-    result = assistant.bulk_prepare([])
+    result = _run_bulk_prepare(assistant, [])
 
     assert result.message == "No Job Postings selected for Bulk Prepare."
     assert result.prepared == []
@@ -200,7 +234,7 @@ def test_bulk_prepare_combined_confirm_for_hc_fail_and_overwrite(
     assert tailor.tailor_calls == 1
 
     with pytest.raises(BulkPrepareNeedsConfirm) as pending:
-        assistant.bulk_prepare(["86534", "86535", "86536"])
+        _run_bulk_prepare(assistant, ["86534", "86535", "86536"])
     # 86536 is unknown / not can_prepare → skipped, still listed in selection.
     kinds = {(item.job_posting_id, item.kind) for item in pending.value.items}
     assert ("86534", "hard_constraint_fail") in kinds
@@ -211,14 +245,14 @@ def test_bulk_prepare_combined_confirm_for_hc_fail_and_overwrite(
     assert pending.value.eligible_ids == ["86534", "86535"]
     assert pending.value.skipped_ids == ["86536"]
 
-    result = assistant.bulk_prepare(
-        pending.value.selected_ids, confirm=True
+    result = _run_bulk_prepare(
+        assistant, pending.value.selected_ids, confirm=True
     )
 
     assert result.prepared == ["86534", "86535"]
     assert result.skipped == ["86536"]
     assert tailor.tailor_calls == 3
-    assert assistant.get_preparation_packet("86534") is not None
+    assert assistant.load_preparation_packet_page("86534") is not None
 
 
 def test_bulk_prepare_stops_remaining_on_llm_unavailable(tmp_path: Path) -> None:
@@ -248,15 +282,15 @@ def test_bulk_prepare_stops_remaining_on_llm_unavailable(tmp_path: Path) -> None
 
     tailor.tailor = _fail_after_first  # type: ignore[method-assign]
 
-    result = assistant.bulk_prepare(["86534", "86535", "86536"])
+    result = _run_bulk_prepare(assistant, ["86534", "86535", "86536"])
 
     assert result.prepared == ["86534"]
     assert result.failed[0][0] == "86535"
     assert "LLM Unavailable" in result.failed[0][1]
     assert result.stopped == ["86536"]
-    assert assistant.get_preparation_packet("86534") is not None
-    assert assistant.get_preparation_packet("86535") is None
-    assert assistant.get_preparation_packet("86536") is None
+    assert assistant.load_preparation_packet_page("86534") is not None
+    assert assistant.load_preparation_packet_page("86535") is None
+    assert assistant.load_preparation_packet_page("86536") is None
 
 
 def test_bulk_prepare_continues_after_non_llm_prepare_failure(tmp_path: Path) -> None:
@@ -281,17 +315,19 @@ def test_bulk_prepare_continues_after_non_llm_prepare_failure(tmp_path: Path) ->
             list_fingerprint="x",
         )
     )
-    assert assistant.can_prepare("86534")
+    page = assistant.load_match_assessment_page("86534")
+    assert page is not None
+    assert page.can_prepare
     assert assistant._catalog_store.get_job_posting("86534") is not None
 
-    result = assistant.bulk_prepare(["86534", "86535"])
+    result = _run_bulk_prepare(assistant, ["86534", "86535"])
 
     assert result.prepared == ["86535"]
     assert result.failed[0][0] == "86534"
     assert "detail" in result.failed[0][1].lower()
     assert result.stopped == []
     assert tailor.tailor_calls == 1
-    assert assistant.get_preparation_packet("86535") is not None
+    assert assistant.load_preparation_packet_page("86535") is not None
 
 
 def test_bulk_prepare_retries_tailor_once_per_posting_when_schema_invalid(
@@ -316,16 +352,16 @@ def test_bulk_prepare_retries_tailor_once_per_posting_when_schema_invalid(
         llm_cv_tailor=tailor,
     )
 
-    result = assistant.bulk_prepare(["86534"])
+    result = _run_bulk_prepare(assistant, ["86534"])
 
     assert result.prepared == ["86534"]
     assert result.failed == []
     assert tailor.tailor_calls == 2
-    view = assistant.get_preparation_packet("86534")
-    assert view is not None
-    assert view.packet.pdf_missing is False
-    assert view.packet.pdf_missing_reasons == ()
-    assert view.packet.tailored_yaml == _SAMPLE_CV
+    page = assistant.load_preparation_packet_page("86534")
+    assert page is not None
+    assert page.packet.pdf_missing is False
+    assert page.packet.pdf_missing_reasons == ()
+    assert page.packet.tailored_yaml == _SAMPLE_CV
 
 
 def test_bulk_delete_requires_confirm_listing_selection(tmp_path: Path) -> None:
@@ -338,7 +374,9 @@ def test_bulk_delete_requires_confirm_listing_selection(tmp_path: Path) -> None:
         rejudge_count=1,
     )
     assistant.prepare("86534")
-    assert assistant.get_match_assessment("86535") is None
+    pending_page = assistant.load_match_assessment_page("86535")
+    assert pending_page is not None
+    assert pending_page.match_assessment is None
 
     with pytest.raises(BulkDeleteNeedsConfirm) as pending:
         assistant.bulk_delete(["86534", "86535"])
@@ -352,10 +390,13 @@ def test_bulk_delete_requires_confirm_listing_selection(tmp_path: Path) -> None:
     result = assistant.bulk_delete(["86534", "86535"], confirm=True)
 
     assert result.deleted == ["86534", "86535"]
-    assert assistant.list_assessment_summaries(
-        include_closed=True, include_passed_deadlines=True
-    ) == []
-    assert assistant.get_preparation_packet("86534") is None
+    assert (
+        assistant.load_assessment_summary_catalog(
+            include_closed=True, include_passed_deadlines=True
+        ).rows
+        == []
+    )
+    assert assistant.load_preparation_packet_page("86534") is None
 
 
 def test_bulk_delete_empty_selection_is_noop_with_message(tmp_path: Path) -> None:
@@ -365,4 +406,6 @@ def test_bulk_delete_empty_selection_is_noop_with_message(tmp_path: Path) -> Non
 
     assert result.message == "No Job Postings selected for Bulk Delete."
     assert result.deleted == []
-    assert assistant.get_match_assessment("86534") is not None
+    remaining = assistant.load_match_assessment_page("86534")
+    assert remaining is not None
+    assert remaining.match_assessment is not None

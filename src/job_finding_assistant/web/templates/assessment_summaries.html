@@ -146,7 +146,7 @@
         {% if llm_run.active %}
         <p id="llm-run-status">
           {{ llm_run.phase }}:
-          {% if llm_run.title %}{{ llm_run.title }}{% if llm_run.employer %} — {{ llm_run.employer }}{% endif %}{% else %}…{% endif %}
+          {% if llm_run.in_flight %}{% for posting in llm_run.in_flight %}{{ posting.title }}{% if posting.employer %} — {{ posting.employer }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% elif llm_run.title %}{{ llm_run.title }}{% if llm_run.employer %} — {{ llm_run.employer }}{% endif %}{% else %}…{% endif %}
           {% if llm_run.current_index is not none and llm_run.total is not none %}
           ({{ llm_run.current_index }} of {{ llm_run.total }})
           {% endif %}
@@ -249,9 +249,15 @@
               return data.message || "";
             }
             var label = data.phase || "LLM Run";
-            var identity = data.title
-              ? data.title + (data.employer ? " — " + data.employer : "")
-              : "…";
+            function name(item) {
+              return item.title + (item.employer ? " — " + item.employer : "");
+            }
+            var identity = "…";
+            if (data.in_flight && data.in_flight.length) {
+              identity = data.in_flight.map(name).join("; ");
+            } else if (data.title) {
+              identity = name(data);
+            }
             var progress =
               data.current_index != null && data.total != null
                 ? " (" + data.current_index + " of " + data.total + ")"

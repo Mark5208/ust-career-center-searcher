@@ -74,7 +74,7 @@ def test_assistant_refuses_crawl_until_user_attended_login(tmp_path: Path) -> No
     assert not assistant.can_start_crawl()
     outcome = assistant.run_crawl()
     assert outcome.status == "not_authenticated"
-    assert assistant.list_assessment_summaries() == []
+    assert assistant.load_assessment_summary_catalog().rows == []
     assert job_board.discover_calls == 0
 
 
@@ -122,7 +122,9 @@ def test_assistant_incremental_crawl_stores_job_postings_in_catalog(tmp_path: Pa
 
     assert outcome.status == "completed"
     assert outcome.stored_count == 1
-    summaries = assistant.list_assessment_summaries()
+    summaries = [
+        row.summary for row in assistant.load_assessment_summary_catalog().rows
+    ]
     assert len(summaries) == 1
     assert summaries[0].job_posting_id == "86534"
     assert summaries[0].title == "System Engineer"
@@ -229,7 +231,10 @@ def test_assistant_deadline_hardline_skips_detail_fetch_and_catalog_add(
     assert outcome.status == "completed"
     assert outcome.stored_count == 1
     assert job_board.fetch_detail_ids == ["new"]
-    ids = {row.job_posting_id for row in assistant.list_assessment_summaries()}
+    ids = {
+        row.summary.job_posting_id
+        for row in assistant.load_assessment_summary_catalog().rows
+    }
     assert ids == {"new"}
 
 
@@ -295,8 +300,8 @@ def test_assistant_narrow_filters_do_not_mark_absent_postings_closed(
 
     assert outcome.status == "completed"
     by_id = {
-        row.job_posting_id: row
-        for row in assistant.list_assessment_summaries(include_closed=True)
+        row.summary.job_posting_id: row.summary
+        for row in assistant.load_assessment_summary_catalog(include_closed=True).rows
     }
     assert by_id["keep"].listing_status == "Open"
     assert by_id["gone-from-narrow"].listing_status == "Open"
@@ -343,8 +348,8 @@ def test_assistant_closing_capable_crawl_marks_absent_postings_closed(
 
     assert outcome.status == "completed"
     by_id = {
-        row.job_posting_id: row
-        for row in assistant.list_assessment_summaries(include_closed=True)
+        row.summary.job_posting_id: row.summary
+        for row in assistant.load_assessment_summary_catalog(include_closed=True).rows
     }
     assert by_id["keep"].listing_status == "Open"
     assert by_id["gone"].listing_status == "Closed"
@@ -369,7 +374,9 @@ def test_assistant_reopens_closed_posting_when_it_reappears_on_list(
     job_board.set_list_entries([])
     assert assistant.run_crawl().status == "completed"
     assert (
-        assistant.list_assessment_summaries(include_closed=True)[0].listing_status
+        assistant.load_assessment_summary_catalog(include_closed=True)
+        .rows[0]
+        .summary.listing_status
         == "Closed"
     )
 
@@ -379,7 +386,10 @@ def test_assistant_reopens_closed_posting_when_it_reappears_on_list(
 
     assert outcome.status == "completed"
     assert job_board.fetch_detail_ids == []
-    assert assistant.list_assessment_summaries()[0].listing_status == "Open"
+    assert (
+        assistant.load_assessment_summary_catalog().rows[0].summary.listing_status
+        == "Open"
+    )
 
 
 def test_assistant_auth_loss_mid_crawl_is_partial_success_without_closing(
@@ -426,8 +436,8 @@ def test_assistant_auth_loss_mid_crawl_is_partial_success_without_closing(
     assert outcome.status == "partial_success"
     assert outcome.stored_count == 1
     by_id = {
-        row.job_posting_id: row
-        for row in assistant.list_assessment_summaries(include_closed=True)
+        row.summary.job_posting_id: row.summary
+        for row in assistant.load_assessment_summary_catalog(include_closed=True).rows
     }
     assert by_id["a"].listing_status == "Open"
     assert "b" not in by_id
