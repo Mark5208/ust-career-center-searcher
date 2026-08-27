@@ -1,0 +1,5 @@
+interface:
+  display_name: "Master CV Authoring"
+  short_description: "Classify a Master CV Authoring Slice and hint which leaf to type."
+policy:
+  allow_implicit_invocation: false

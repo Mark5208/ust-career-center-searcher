@@ -1,0 +1,5 @@
+interface:
+  display_name: "Master CV Content Interview"
+  short_description: "Gap-fill a user-nominated Slice of Master CV content, then write on confirm."
+policy:
+  allow_implicit_invocation: false

@@ -17,7 +17,6 @@ from job_finding_assistant.assistant import (
     BulkDeleteNeedsConfirm,
     BulkDeleteResult,
     BulkPrepareNeedsConfirm,
-    BulkPrepareResult,
     CandidateFilesView,
     CrawlFilters,
     CrawlOutcome,
@@ -78,11 +77,6 @@ class SupportsAssistantUi(Protocol):
 
     def delete(self, job_posting_id: str, *, confirm: bool = False) -> None:
         """Hard-remove Job Posting, Match Assessment, and Preparation Packet."""
-
-    def bulk_prepare(
-        self, job_posting_ids: list[str], *, confirm: bool = False
-    ) -> BulkPrepareResult:
-        """Bulk Prepare selected Assessment Summary rows (sync helper)."""
 
     def start_bulk_prepare_llm_run(
         self, job_posting_ids: list[str], *, confirm: bool = False
@@ -197,6 +191,14 @@ def _llm_run_status_payload(status: LlmRunStatus) -> dict[str, object]:
         "total": status.total,
         "stop_requested": status.stop_requested,
         "message": status.message,
+        "in_flight": [
+            {
+                "job_posting_id": posting.job_posting_id,
+                "title": posting.title,
+                "employer": posting.employer,
+            }
+            for posting in status.in_flight
+        ],
     }
 
 

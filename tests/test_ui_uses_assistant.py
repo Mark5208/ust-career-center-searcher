@@ -21,6 +21,7 @@ from job_finding_assistant.assistant import (
     DeleteNeedsConfirm,
     EnrichmentSessionView,
     LlmRunAlreadyInFlight,
+    LlmRunPosting,
     LlmRunStatus,
     MatchAssessmentPage,
     PreparationPacketPage,
@@ -83,7 +84,6 @@ class _RecordingAssistant:
             "Delete permanently removes Job Posting 'System Engineer — Example Corp', "
             "Match Assessment, and Preparation Packet. No undo."
         )
-        self.bulk_prepare_calls: list[tuple[list[str], bool]] = []
         self.bulk_prepare_llm_run_calls: list[tuple[list[str], bool]] = []
         self.catalog_assess_llm_run_calls = 0
         self.stop_llm_run_calls = 0
@@ -194,12 +194,6 @@ class _RecordingAssistant:
         self.summaries = [
             row for row in self.summaries if row.job_posting_id != job_posting_id
         ]
-
-    def bulk_prepare(
-        self, job_posting_ids: list[str], *, confirm: bool = False
-    ) -> BulkPrepareResult:
-        self.bulk_prepare_calls.append((list(job_posting_ids), confirm))
-        return self.bulk_prepare_result
 
     def start_bulk_prepare_llm_run(
         self, job_posting_ids: list[str], *, confirm: bool = False
@@ -526,6 +520,46 @@ def test_catalog_page_shows_active_llm_run_status_and_stop() -> None:
     assert "Assess Pending" not in response.text
 
 
+def test_catalog_page_lists_every_in_flight_posting_while_judging() -> None:
+    assistant = _RecordingAssistant()
+    assistant.pending_remaining = 5
+    assistant.llm_run_status = LlmRunStatus(
+        active=True,
+        phase="Judging",
+        job_posting_id="86534",
+        title="System Engineer",
+        employer="Example Corp",
+        current_index=1,
+        total=5,
+        in_flight=(
+            LlmRunPosting(
+                job_posting_id="86534",
+                title="System Engineer",
+                employer="Example Corp",
+            ),
+            LlmRunPosting(
+                job_posting_id="86535", title="Data Analyst", employer="Other Corp"
+            ),
+        ),
+    )
+    client = TestClient(create_app(assistant))
+
+    page = client.get("/")
+
+    assert page.status_code == 200
+    assert "System Engineer — Example Corp" in page.text
+    assert "Data Analyst — Other Corp" in page.text
+    assert "(1 of 5)" in page.text
+
+    status = client.get("/llm-run/status")
+
+    assert [item["job_posting_id"] for item in status.json()["in_flight"]] == [
+        "86534",
+        "86535",
+    ]
+    assert status.json()["in_flight"][1]["title"] == "Data Analyst"
+
+
 def test_catalog_llm_run_routes_use_assistant() -> None:
     assistant = _RecordingAssistant()
     client = TestClient(create_app(assistant))
@@ -628,8 +662,9 @@ def test_catalog_get_is_fast_and_assess_llm_run_drains_until_empty(
     )
     assistant.set_master_cv_path(str(cv_path))
     assistant.run_crawl()
-    assert len(assistant.list_assessment_summaries()) == 6
-    assert all(row.pending for row in assistant.list_assessment_summaries())
+    catalog = assistant.load_assessment_summary_catalog()
+    assert len(catalog.rows) == 6
+    assert all(row.summary.pending for row in catalog.rows)
 
     client = TestClient(create_app(assistant))
     response = client.get("/")
@@ -647,7 +682,9 @@ def test_catalog_get_is_fast_and_assess_llm_run_drains_until_empty(
     assert not assistant.get_llm_run_status().active
     assert judge.judge_calls == 6
     pending_after = sum(
-        1 for row in assistant.list_assessment_summaries() if row.pending
+        1
+        for row in assistant.load_assessment_summary_catalog().rows
+        if row.summary.pending
     )
     assert pending_after == 0
 
