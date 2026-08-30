@@ -1,0 +1,5 @@
+interface:
+  display_name: "Sweep"
+  short_description: "After a wayfinder map is done, classify leftovers and janitor spent throwaways."
+policy:
+  allow_implicit_invocation: false
