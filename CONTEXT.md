@@ -77,7 +77,7 @@ Eval verdict that one Master CV Authoring Sitting did not satisfy the sandbox-ev
 _Avoid_: fail (for this), Sitting fail, Gate missed (for this)
 
 **Gate met**:
-Family-level verdict that skills-only Authoring sufficed: a Sitting from a name-only Master CV (no experience, projects, or education entries) wrote Holistic Slice highlights on a new entry, and a separate Sitting holistically deepened an existing experience entry. Sole latch that keeps in-app Master CV Enrichment.
+Family-level verdict that skills-only Authoring sufficed: a Sitting met from a name-only Master CV (no experience, projects, or education entries) wrote Holistic Slice highlights on a new entry, and a separate Sitting met holistically deepened an existing experience entry. Sole latch that keeps in-app Master CV Enrichment.
 _Avoid_: parity, feature-parity, skills-only sufficiency (as a term), Sitting met (for this), pass
 
 **Gate missed**:
