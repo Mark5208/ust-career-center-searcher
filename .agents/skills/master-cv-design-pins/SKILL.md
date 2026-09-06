@@ -14,9 +14,9 @@ Rules: ADR-0018. Not a Master CV Enrichment session (ADR-0017). No fabricated ex
 
 If this conversation already has an Authoring `/name`, continue that Sitting. Otherwise this invoke opens one. Continue until abort or one Authoring write protocol confirm. Several Slices may accumulate into one draft. Authoring is a Sitting, not a session.
 
-The user's first speech nominates the Slice — a named theme id, knob, locale, settings value, or pin list, including whatever they already said on invoke. Wait for that speech. Open on that nomination; do not survey theme, knobs, or pins.
+The user's first speech nominates the Slice — a named theme id, knob, locale, settings value, pin list, or a look without a theme id, including whatever they already said on invoke. Wait for that speech. Open on that nomination; do not audit theme, knobs, or pins.
 
-A look without a theme id is a nomination that still needs an id: ask for a theme id. Listing the nine built-ins without picking one is a valid ask. Do not propose or write a theme, palette, or knobs until they name one.
+A look without a theme id still needs an id: ask for a theme id. Listing the nine built-ins without picking one is a valid ask. Until they name a theme id, do not propose or write a theme or palette. Write knobs only when they name a concrete value.
 
 If they paste a Job Posting or Gap Report, apply Job-agnostic.
 
@@ -26,7 +26,7 @@ Done when the Sitting has a user-nominated Slice, or the user has aborted.
 
 Named-write gap-fill of design, locale, selected settings, and pins. Ask only for a theme id, a concrete knob/locale/settings value, or a pin list of would-be `cv.sections` keys. Do not pick a theme, a measurement, or a pin order the user did not name. Uncapped follow-ups, stay inside the Slice. If the ask already fills the Slice, skip further questions and go to the Authoring write protocol; its change list is the draft.
 
-This leaf does not walk Facets. A layout Slice is named-write of the nominated pieces only.
+This leaf does not walk Facets. A design-pins Slice is named-write of the nominated pieces only.
 
 Stop when the Slice is filled, not when every knob is done. The user may end the Slice; remaining gaps drop. Empty remainder → no write. When the Slice is filled or dropped, go to the protocol or stop — no further layout questions, no offer of theme, knobs, or pins they did not name. A misfire bounce to `/master-cv-content-interview` is not an offer.
 
@@ -62,7 +62,7 @@ Any of the nine built-in themes. A custom local theme folder only if the file al
 
 Theme switch: write the new `design.theme`. Drop other `design.*` knobs unless the user asked to keep a specific one. Leave `locale`, `settings`, and pins. The change list names what was dropped.
 
-If the file has no `design.theme` and the user only names knobs, leave theme unset.
+If the file has no `design.theme` and the user only names knobs, leave theme unset. Do not insert `theme: classic`.
 
 The Authoring write protocol change list is the preview. Do not render a Master PDF.
 
