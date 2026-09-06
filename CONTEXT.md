@@ -57,28 +57,52 @@ The user-owned full experience dossier as RenderCV YAML on disk — may be longe
 _Avoid_: resume, profile, base CV, LaTeX Master CV, shadow dossier
 
 **Master CV Enrichment**:
-A user-started, job-agnostic flow: freeform experience description → user-confirmed placement (LLM suggests existing or new entry under an existing section) → fixed-dimension step interview → editable full highlights list → confirm write of ordinary entry content into the Master CV. One session writes one entry. Not part of Prepare or Crawl. Not Master CV Authoring (skills, Sitting, Authoring write protocol). Rules: ADR-0017.
-_Avoid_: Tailored CV control, CV chat, auto-expand, experience mining, JD-steered interview, entry-list-only enrich, Sitting (for this)
+A user-started, job-agnostic flow: freeform experience description → user-confirmed placement (LLM suggests existing or new entry under an existing section) → fixed-dimension step interview → editable full highlights list → confirm write of ordinary entry content into the Master CV. One session writes one entry; remains until Gate met; not a skill — Authoring may cover the same job via a Holistic Slice. Not part of Prepare or Crawl. Not Master CV Authoring (skills, Sitting, Authoring write protocol). Rules: ADR-0017.
+_Avoid_: Tailored CV control, CV chat, auto-expand, experience mining, JD-steered interview, entry-list-only enrich, Sitting (for this), Holistic Slice (for this), Gate met (as this flow)
 
 **Master CV Authoring**:
-The user-invoked, job-agnostic HITL skill family for changing the Master CV — content, design, and pins — written on Sitting confirm through the Authoring write protocol. Distinct from in-app Master CV Enrichment. Rules: ADR-0018.
-_Avoid_: Enrichment (for this), CV chat, YAML editor, experience mining, JD-steered interview, session (for this), Authoring session
+The user-invoked, job-agnostic HITL skill family for changing the Master CV — Holistic Slice and Detailed Slice on content, plus design, locale, selected settings, and pins — written on Sitting confirm through the Authoring write protocol. Distinct from in-app Master CV Enrichment, which remains until Gate met. Rules: ADR-0018.
+_Avoid_: Enrichment (for this), CV chat, YAML editor, experience mining, JD-steered interview, session (for this), Authoring session, parity
 
 **Sitting**:
-From the first Master CV Authoring `/name` in a conversation through abort or one Authoring write protocol confirm — possibly several Slices and further typed leaf `/name`s in that conversation, one Master CV write. A new conversation is a new Sitting. Not a Master CV Enrichment session.
+From the first Master CV Authoring `/name` in a conversation through abort or one Authoring write protocol confirm — possibly several Slices (Holistic Slice, Detailed Slice, and/or design-pins) and further typed leaf `/name`s in that conversation, one Master CV write. A new conversation is a new Sitting. Not a Master CV Enrichment session and not a one-entry cap.
 _Avoid_: session, Authoring session, chat, Enrichment session (for this), eval Sitting (as a type)
 
 **Sitting met**:
 Eval verdict that one Master CV Authoring Sitting satisfied the sandbox-eval rubric. Not a Hard Constraint outcome.
-_Avoid_: pass (for this), Sitting pass, eval Sitting (as a type)
+_Avoid_: pass (for this), Sitting pass, eval Sitting (as a type), Gate met (for this)
 
 **Sitting missed**:
 Eval verdict that one Master CV Authoring Sitting did not satisfy the sandbox-eval rubric. Not a Hard Constraint outcome.
-_Avoid_: fail (for this), Sitting fail
+_Avoid_: fail (for this), Sitting fail, Gate missed (for this)
+
+**Gate met**:
+Family-level verdict that skills-only Authoring sufficed: a Sitting met from a name-only Master CV (no experience, projects, or education entries) wrote Holistic Slice highlights on a new entry, and a separate Sitting met holistically deepened an existing experience entry. Sole latch that keeps in-app Master CV Enrichment.
+_Avoid_: parity, feature-parity, skills-only sufficiency (as a term), Sitting met (for this), pass
+
+**Gate missed**:
+Family-level verdict that the Gate met bar did not hold. A later per-skill Sitting missed does not by itself keep Enrichment.
+_Avoid_: fail, parity missed, Sitting missed (for this)
 
 **Slice**:
-The user-nominated scope of one content-interview or design-pins interview inside a Sitting. The interview stops when that request is filled, not when the Master CV is complete.
-_Avoid_: session scope, audit, full CV review, Enrichment session
+The user-nominated scope of one content-interview or design-pins interview inside a Sitting. A content-interview Slice is a Holistic Slice or a Detailed Slice; a design-pins Slice fills a nominated layout or pins request and does not walk Facets. The interview stops when that request is filled, not when the Master CV is complete.
+_Avoid_: session scope, audit, full CV review, Enrichment session, mode
+
+**Facet**:
+Interview coverage on a Holistic Slice, in this order: problem/context; technical work; collaboration/leadership; domain/impact; outcomes/metrics. Not RenderCV keys, and not Master CV Enrichment dimension steps (same five, different ritual).
+_Avoid_: dimension (for this), required dimension, required Facet, YAML field
+
+**Holistic Slice**:
+A content-interview Slice that offers the five Facets on one experience, projects, or education entry. The interview stops when that entry's request is filled, not when the Master CV is complete. Not a Master CV Enrichment session.
+_Avoid_: Enrichment (for this), Enrichment session (for this), mode, required dimensions, holistic recording (as a type)
+
+**Detailed Slice**:
+A content-interview Slice that fills named holes or other Master CV content (header, skills/tools, other entries, deletes, reorders, a one-bullet edit) without walking the Facets.
+_Avoid_: holistic Slice (for this), mode, audit, gap-fill (alone)
+
+**Capability bullet**:
+A highlight written from a filled Facet on a Holistic Slice: what you did, with what, to what effect. A skill or tool appears only if the user affirmed it; Authoring does not add a skills/tools row from it.
+_Avoid_: feature list, skills mirror, extra YAML key, dimension field
 
 **Authoring write protocol**:
 The confirm-and-write ritual that ends a non-empty Sitting: explicit chat confirm, then one atomic write of the configured Master CV (the Master CV path on Candidate files) — not a Master CV Enrichment session write. Rules: ADR-0018.
