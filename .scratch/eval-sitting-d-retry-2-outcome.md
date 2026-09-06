@@ -1,4 +1,4 @@
-# Eval Sitting D outcome (retry 2)
+# Sitting D outcome (retry 2)
 
 **Sitting:** D  
 **Leaf:** `/master-cv-design-pins`  
