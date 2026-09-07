@@ -13,3 +13,4 @@ Working research and grill outcomes. Not product spec.
 ## Eval
 
 - [eval-sitting-r-outcome.md](eval-sitting-r-outcome.md) — Sitting R **Sitting met** ([#78](https://github.com/Mark5208/ust-career-center-searcher/issues/78))
+- [eval-sitting-d-retry-2-outcome.md](eval-sitting-d-retry-2-outcome.md) — Sitting D (design-pins named-write) for [Design-pins named-write negatives (Sitting D)](https://github.com/Mark5208/ust-career-center-searcher/issues/77)
