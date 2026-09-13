@@ -14,3 +14,5 @@ Working research and grill outcomes. Not product spec.
 
 - [eval-sitting-r-outcome.md](eval-sitting-r-outcome.md) — Sitting R **Sitting met** ([#78](https://github.com/Mark5208/ust-career-center-searcher/issues/78))
 - [eval-sitting-d-retry-2-outcome.md](eval-sitting-d-retry-2-outcome.md) — Sitting D (design-pins named-write) for [Design-pins named-write negatives (Sitting D)](https://github.com/Mark5208/ust-career-center-searcher/issues/77)
+- [eval-sitting-g-outcome.md](eval-sitting-g-outcome.md) — Sitting G **Sitting met** ([#76](https://github.com/Mark5208/ust-career-center-searcher/issues/76)); dossier bar held
+- [eval-sitting-e-outcome.md](eval-sitting-e-outcome.md) — Sitting E **Sitting met** ([#79](https://github.com/Mark5208/ust-career-center-searcher/issues/79)); **Gate met** held
