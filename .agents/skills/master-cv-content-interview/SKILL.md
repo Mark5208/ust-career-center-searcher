@@ -81,7 +81,7 @@ Stay inside the Slice. Do not recap the Sitting. Do not re-home entries outside 
 
 Offer all five Facets in this order, one at a time: problem/context; technical work; collaboration/leadership; domain/impact; outcomes/metrics. They are interview coverage, not RenderCV keys. Extra keys are not a content schema. Prose lands in optional `summary` plus ordinary `highlights`.
 
-Skip a Facet the dump already filled. Offer only remaining empty Facets. If the dump fills all five, draft the full `highlights` list and go to the Authoring write protocol.
+Skip a Facet the dump already filled. Offer only remaining empty Facets. If the dump fills all five, draft the full `highlights` list and go to the Authoring write protocol. Pre-existing YAML on an existing entry is not dump-filled: still offer all five Facets unless this Sitting's speech already answered them.
 
 The user may skip an empty Facet. At most one clarifying follow-up per Facet. A thin answer does not fill that Facet, does not mint a highlight, and is not punched up.
 
