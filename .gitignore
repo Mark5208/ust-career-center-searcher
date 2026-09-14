@@ -14,3 +14,9 @@ venv/
 
 # Personal candidate materials (never commit)
 private/
+
+# Local working notes — not part of the published tree
+.scratch/
+
+# Generated knowledge graph
+graphify-out/
